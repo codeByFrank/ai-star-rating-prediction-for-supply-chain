@@ -1,0 +1,5 @@
+debug: true
+environment: development
+log_level: DEBUG
+sample_data: true
+use_cache: false
