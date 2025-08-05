@@ -16,4 +16,4 @@ matplotlib==3.9.2
 seaborn==0.13.2
 tqdm==4.66.1
 nltk==3.9.1
-spacy==3.7.0 
+spacy==3.7.0
