@@ -4,7 +4,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-df=pd.read_csv("train.csv")
+from pathlib import Path
+
+HERE = Path(__file__).parent           # = src/streamlit
+DATA_PATH = HERE / "train.csv"         # = src/streamlit/train.csv
+
+if DATA_PATH.exists():
+    df = pd.read_csv(DATA_PATH)        # ggf. encoding="utf-8"
+else:
+    st.warning("train.csv not found. Upload a CSV:")
+    uploaded = st.file_uploader("Upload CSV", type="csv")
+    if uploaded:
+        df = pd.read_csv(uploaded)
+    else:
+        st.stop()
 
 st.title("Titanic : binary classification project")
 st.sidebar.title("Table of contents")
