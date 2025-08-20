@@ -9,18 +9,28 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, roc_auc_score
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import precision_recall_fscore_support, recall_score, precision_score
 import tensorflow as tf
 from tensorflow.keras.models import Model, Sequential
+
+from nltk.corpus import wordnet
 from tensorflow.keras.layers import (
     Dense, LSTM, Bidirectional, Conv1D, MaxPooling1D, GlobalMaxPooling1D,
     Embedding, Dropout, Input, concatenate, Attention, MultiHeadAttention,
-    LayerNormalization, Add, GlobalAveragePooling1D, BatchNormalization
+    LayerNormalization, Add, GlobalAveragePooling1D, BatchNormalization, SpatialDropout1D
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.optimizers import Adam, RMSprop
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ReduceLROnPlateau,
+    TerminateOnNaN,
+    ModelCheckpoint,
+    CSVLogger
+)
+
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.utils import to_categorical
+from imblearn.over_sampling import SMOTE
 import pickle
 import warnings
 import os
@@ -34,7 +44,7 @@ tf.random.set_seed(42)
 
 
 class DeepLearningModels:
-    def __init__(self, vocab_size, max_len, num_features, num_classes, embedding_dim=100):
+    def __init__(self, vocab_size, max_len, num_features, num_classes, embedding_dim=128):
         self.vocab_size = vocab_size
         self.max_len = max_len
         self.num_features = num_features
@@ -43,111 +53,81 @@ class DeepLearningModels:
         self.models = {}
         self.histories = {}
 
+    def create_mlp_model(self, input_dim):
+        """Model 6: Deep MLP with TF-IDF features"""
+        model = Sequential([ Input(shape=(input_dim,)),
+                  # First hidden layer with batch normalization
+                  Dense(1024, activation='relu', kernel_regularizer=l2(0.001), input_shape=(input_dim,)),
+                  BatchNormalization(),
+                  Dropout(0.6),
+                  # Second hidden layer
+                  Dense(512, activation='relu', kernel_regularizer=l2(0.001)),
+                  BatchNormalization(),
+                  Dropout(0.5),
+                  # Third hidden layer
+                  Dense(256, activation='relu'),
+                  Dropout(0.4),
+                  Dense(128, activation='relu'),
+                  # Output layer
+                  Dense(self.num_classes, activation='softmax')
+        ])
+        return model
+
+
     def create_lstm_model(self):
         """Model 1: LSTM-based RNN for sequential text processing"""
         # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-        text_embedding = Embedding(self.vocab_size, self.embedding_dim, mask_zero=True)(text_input)
-        text_lstm = LSTM(64, dropout=0.3, recurrent_dropout=0.3)(text_embedding)
+        text_input = Input(shape=(self.max_len,))
+        x = Embedding(self.vocab_size, self.embedding_dim, mask_zero=True)(text_input)
+        x = SpatialDropout1D(0.3)(x)
+        x = LSTM(128, return_sequences=True)(x)
+        x = LSTM(64)(x)
 
         # Numerical input branch
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu', kernel_regularizer=l2(0.01))(num_input)
-        num_dropout = Dropout(0.3)(num_dense)
+        num_input = Input(shape=(self.num_features,))
+        y = Dense(64, activation='relu')(num_input)
+        y = BatchNormalization()(y)
 
         # Combine branches
-        combined = concatenate([text_lstm, num_dropout])
-        hidden = Dense(64, activation='relu', kernel_regularizer=l2(0.01))(combined)
-        hidden = Dropout(0.4)(hidden)
-        hidden = Dense(32, activation='relu')(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
+        z = concatenate([x, y])
+        z = Dense(128, activation='relu')(z)
+        z = Dropout(0.5)(z)
+        output = Dense(self.num_classes, activation='softmax')(z)
 
         model = Model(inputs=[text_input, num_input], outputs=output)
+        optimizer = Adam(learning_rate=0.001, clipvalue=0.5)
+        model.compile(optimizer=optimizer,
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
         return model
 
     def create_bilstm_attention_model(self):
         """Model 2: Bidirectional LSTM with attention mechanism"""
         # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-        text_embedding = Embedding(self.vocab_size, self.embedding_dim, mask_zero=True)(text_input)
+        text_input = Input(shape=(self.max_len,))
+        x = Embedding(self.vocab_size, self.embedding_dim, mask_zero=True)(text_input)
+        x = Bidirectional(LSTM(128, return_sequences=True))(x)
 
-        # Bidirectional LSTM
-        bilstm = Bidirectional(LSTM(64, dropout=0.3, recurrent_dropout=0.3, return_sequences=True))(text_embedding)
+        # Attention
+        attention = MultiHeadAttention(num_heads=4, key_dim=64)(x, x)
+        x = LayerNormalization()(x + attention)
 
-        # Self-attention mechanism
-        attention = MultiHeadAttention(num_heads=4, key_dim=64)(bilstm, bilstm)
-        attention = Add()([bilstm, attention])
-        attention = LayerNormalization()(attention)
+        # Numerical branch
+        num_input = Input(shape=(self.num_features,))
+        y = Dense(64, activation='swish')(num_input)
+        y = LayerNormalization()(y)
 
-        # Global pooling
-        text_features = GlobalAveragePooling1D()(attention)
-
-        # Numerical input branch
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu', kernel_regularizer=l2(0.01))(num_input)
-        num_dropout = Dropout(0.3)(num_dense)
-
-        # Combine branches
-        combined = concatenate([text_features, num_dropout])
-        hidden = Dense(128, activation='relu', kernel_regularizer=l2(0.01))(combined)
-        hidden = Dropout(0.4)(hidden)
-        hidden = Dense(64, activation='relu')(hidden)
-        hidden = Dropout(0.3)(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
+        # Combined
+        context = GlobalAveragePooling1D()(x)
+        z = concatenate([context, y])
+        z = Dense(256, activation='swish')(z)
+        z = Dropout(0.4)(z)
+        output = Dense(self.num_classes, activation='softmax')(z)
 
         model = Model(inputs=[text_input, num_input], outputs=output)
-        return model
-
-    def create_fast_bilstm_attention_model(self):
-        """Optimized BiLSTM with Attention Model for Speed"""
-        # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-
-        # Optimized embedding with smaller dimension
-        text_embedding = Embedding(
-            self.vocab_size,
-            min(128, self.embedding_dim),  # Reduced embedding size
-            mask_zero=True
-        )(text_input)
-
-        # Faster Bidirectional LSTM
-        bilstm = Bidirectional(
-            LSTM(64,  # Maintained size but optimized settings
-                 dropout=0.2,  # Reduced dropout
-                 recurrent_dropout=0.1,  # Reduced recurrent dropout
-                 return_sequences=True,
-                 activation='tanh',  # Faster than default
-                 recurrent_activation='sigmoid')  # Faster than default
-        )(text_embedding)
-
-        # Optimized attention mechanism
-        attention = MultiHeadAttention(
-            num_heads=2,  # Reduced heads
-            key_dim=64,  # Matches LSTM units
-            dropout=0.1  # Added attention dropout
-        )(bilstm, bilstm)
-
-        # Simplified residual connection
-        attention = Add()([bilstm, attention])
-
-        # Removed LayerNorm for speed (optional: can keep if critical for performance)
-
-        # Efficient context extraction
-        text_features = GlobalAveragePooling1D()(attention)
-
-        # Numerical input branch (optimized)
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu')(num_input)  # Removed regularizer
-
-        # Combine branches
-        combined = concatenate([text_features, num_dense])
-
-        # Optimized classifier head
-        hidden = Dense(64, activation='relu')(combined)  # Smaller layer
-        hidden = Dropout(0.3)(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
-
-        model = Model(inputs=[text_input, num_input], outputs=output)
+        model.compile(optimizer=Adam(learning_rate=0.0005),
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
         return model
 
     def create_robust_model(self):
@@ -172,8 +152,6 @@ class DeepLearningModels:
             metrics=['accuracy']
         )
         return model
-
-    from keras.layers import Attention  # Use Keras' built-in attention
 
     def create_accurate_bilstm_attention_model(self):
         """High-performance BiLSTM with Attention"""
@@ -232,119 +210,107 @@ class DeepLearningModels:
     def create_cnn_model(self):
         """Model 3: CNN for text classification with multiple filter sizes"""
         # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-        text_embedding = Embedding(self.vocab_size, self.embedding_dim)(text_input)
+        text_input = Input(shape=(self.max_len,))
+        x = Embedding(self.vocab_size, 128)(text_input)
 
-        # Multiple CNN branches with different filter sizes
-        conv_branches = []
-        filter_sizes = [3, 4, 5]
-
-        for filter_size in filter_sizes:
-            conv = Conv1D(64, filter_size, activation='relu', padding='same')(text_embedding)
-            conv = Dropout(0.3)(conv)
+        # Parallel conv branches with residual connections
+        convs = []
+        for filter_size in [3, 5, 7]:
+            conv = Conv1D(128, filter_size, padding='same', activation='relu')(x)
             conv = MaxPooling1D(2)(conv)
-            conv = Conv1D(32, filter_size, activation='relu', padding='same')(conv)
+            conv = Conv1D(64, filter_size, padding='same', activation='relu')(conv)
             conv = GlobalMaxPooling1D()(conv)
-            conv_branches.append(conv)
+            convs.append(conv)
 
-        # Combine CNN branches
-        if len(conv_branches) > 1:
-            text_features = concatenate(conv_branches)
-        else:
-            text_features = conv_branches[0]
+        x = concatenate(convs) if len(convs) > 1 else convs[0]
 
-        # Numerical input branch
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu', kernel_regularizer=l2(0.01))(num_input)
-        num_dropout = Dropout(0.3)(num_dense)
+        # Numerical branch
+        num_input = Input(shape=(self.num_features,))
+        y = Dense(64, activation='relu')(num_input)
+        y = BatchNormalization()(y)
 
-        # Combine branches
-        combined = concatenate([text_features, num_dropout])
-        hidden = Dense(128, activation='relu', kernel_regularizer=l2(0.01))(combined)
-        hidden = Dropout(0.4)(hidden)
-        hidden = Dense(64, activation='relu')(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
+        # Combined
+        z = concatenate([x, y])
+        z = Dense(128, activation='relu')(z)
+        z = Dropout(0.5)(z)
+        output = Dense(self.num_classes, activation='softmax')(z)
 
         model = Model(inputs=[text_input, num_input], outputs=output)
+        model.compile(optimizer=RMSprop(learning_rate=0.0005),
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
         return model
 
     def create_transformer_model(self):
         """Model 4: Transformer-based model (simplified BERT-like architecture)"""
         # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-        text_embedding = Embedding(self.vocab_size, self.embedding_dim)(text_input)
+        text_input = Input(shape=(self.max_len,))
+        x = Embedding(self.vocab_size, 128)(text_input)
 
-        # Positional encoding (simplified)
+        # Positional encoding
         positions = tf.range(start=0, limit=self.max_len, delta=1)
-        position_embedding = Embedding(self.max_len, self.embedding_dim)(positions)
-        text_embedded = text_embedding + position_embedding
+        positions = Embedding(self.max_len, 128)(positions)
+        x = x + positions
 
         # Transformer blocks
-        for _ in range(2):  # 2 transformer blocks
-            # Multi-head attention
-            attention = MultiHeadAttention(num_heads=8, key_dim=self.embedding_dim // 8)(
-                text_embedded, text_embedded
-            )
-            attention = Dropout(0.1)(attention)
-            attention = Add()([text_embedded, attention])
-            attention = LayerNormalization()(attention)
+        for _ in range(3):  # Additional layer
+            attn = MultiHeadAttention(num_heads=4, key_dim=32)(x, x)
+            x = LayerNormalization()(x + attn)
+            ffn = Dense(512, activation='gelu')(x)
+            ffn = Dense(128)(ffn)
+            x = LayerNormalization()(x + ffn)
 
-            # Feed forward
-            ff = Dense(256, activation='relu')(attention)
-            ff = Dropout(0.1)(ff)
-            ff = Dense(self.embedding_dim)(ff)
-            ff = Add()([attention, ff])
-            text_embedded = LayerNormalization()(ff)
+        x = GlobalAveragePooling1D()(x)
 
-        # Global pooling
-        text_features = GlobalAveragePooling1D()(text_embedded)
+        # Numerical branch
+        num_input = Input(shape=(self.num_features,))
+        y = Dense(64, activation='relu')(num_input)
+        y = LayerNormalization()(y)
 
-        # Numerical input branch
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu', kernel_regularizer=l2(0.01))(num_input)
-        num_dropout = Dropout(0.3)(num_dense)
-
-        # Combine branches
-        combined = concatenate([text_features, num_dropout])
-        hidden = Dense(128, activation='relu', kernel_regularizer=l2(0.01))(combined)
-        hidden = Dropout(0.4)(hidden)
-        hidden = Dense(64, activation='relu')(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
+        # Combined
+        z = concatenate([x, y])
+        z = Dense(256, activation='gelu')(z)
+        z = Dropout(0.4)(z)
+        output = Dense(self.num_classes, activation='softmax')(z)
 
         model = Model(inputs=[text_input, num_input], outputs=output)
+        model.compile(optimizer=Adam(learning_rate=0.0001),
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
         return model
 
     def create_hybrid_cnn_lstm_model(self):
         """Model 5: Hybrid CNN-LSTM model"""
         # Text input branch
-        text_input = Input(shape=(self.max_len,), name='text_input')
-        text_embedding = Embedding(self.vocab_size, self.embedding_dim)(text_input)
+        text_input = Input(shape=(self.max_len,))
+        x = Embedding(self.vocab_size, 128)(text_input)
 
-        # CNN feature extraction
-        conv1 = Conv1D(64, 3, activation='relu', padding='same')(text_embedding)
-        conv1 = Dropout(0.3)(conv1)
-        conv2 = Conv1D(64, 5, activation='relu', padding='same')(text_embedding)
-        conv2 = Dropout(0.3)(conv2)
+        # CNN part
+        conv1 = Conv1D(128, 3, padding='same', activation='relu')(x)
+        conv1 = MaxPooling1D(2)(conv1)
+        conv2 = Conv1D(128, 5, padding='same', activation='relu')(x)
+        conv2 = MaxPooling1D(2)(conv2)
+        x = concatenate([conv1, conv2])
+        x = BatchNormalization()(x)
 
-        # Combine CNN features
-        conv_combined = concatenate([conv1, conv2])
+        # LSTM part
+        x = Bidirectional(LSTM(128))(x)
 
-        # LSTM on top of CNN features
-        lstm_out = LSTM(64, dropout=0.3, recurrent_dropout=0.3)(conv_combined)
+        # Numerical branch
+        num_input = Input(shape=(self.num_features,))
+        y = Dense(64, activation='relu')(num_input)
+        y = BatchNormalization()(y)
 
-        # Numerical input branch
-        num_input = Input(shape=(self.num_features,), name='numerical_input')
-        num_dense = Dense(32, activation='relu', kernel_regularizer=l2(0.01))(num_input)
-        num_dropout = Dropout(0.3)(num_dense)
-
-        # Combine branches
-        combined = concatenate([lstm_out, num_dropout])
-        hidden = Dense(128, activation='relu', kernel_regularizer=l2(0.01))(combined)
-        hidden = Dropout(0.4)(hidden)
-        hidden = Dense(64, activation='relu')(hidden)
-        output = Dense(self.num_classes, activation='softmax')(hidden)
+        # Combined
+        z = concatenate([x, y])
+        z = Dense(256, activation='relu')(z)
+        z = Dropout(0.5)(z)
+        output = Dense(self.num_classes, activation='softmax')(z)
 
         model = Model(inputs=[text_input, num_input], outputs=output)
+        model.compile(optimizer=Adam(learning_rate=0.0005),
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
         return model
 
     def create_hybrid_cnn_lstm_model_modified(self):
@@ -390,18 +356,45 @@ class DeepLearningModels:
         """Create training callbacks"""
         early_stopping = EarlyStopping(
             monitor='val_loss',
-            patience=10,
+            patience=15,
             restore_best_weights=True
         )
 
         reduce_lr = ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
-            patience=5,
+            patience=7,
             min_lr=1e-7
         )
 
         return [early_stopping, reduce_lr]
+
+    def train_model_mlp(self, model, model_name, X_train, X_val, y_train, y_val,
+                    class_weights=None, epochs=100, batch_size=128):
+        """Train a model with given data"""
+        print(f"\nTraining {model_name}...")
+
+        #callbacks = self.create_callbacks()
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=7, min_lr=1e-5),
+            TerminateOnNaN()
+        ]
+
+        history = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            class_weight=class_weights,
+            callbacks=callbacks,
+            verbose=1
+        )
+
+        self.models[model_name] = model
+        self.histories[model_name] = history
+
+        return model, history
 
     def train_model(self, model, model_name, X_text_train, X_num_train, y_train,
                     X_text_val, X_num_val, y_val, class_weights, epochs=100):
@@ -429,14 +422,23 @@ class DeepLearningModels:
         """Evaluate model performance"""
         print(f"\nEvaluating {model_name}...")
 
+        # Make predictions - handle MLP vs other models differently
+        if 'MLP' in model_name:
+            # MLP expects single input array
+            y_pred_proba = model.predict(X_text_test)  # X_text_test actually contains all features for MLP
+        else:
+            # Other models expect separate text and numerical inputs
+            y_pred_proba = model.predict([X_text_test, X_num_test])
+
         # Make predictions
-        y_pred_proba = model.predict([X_text_test, X_num_test])
         y_pred = np.argmax(y_pred_proba, axis=1)
 
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)
         f1_weighted = f1_score(y_test, y_pred, average='weighted')
         f1_macro = f1_score(y_test, y_pred, average='macro')
+        micro_precision = precision_score(y_test, y_pred, average='micro')
+        micro_recall = recall_score(y_test, y_pred, average='micro')
 
         # Multi-class ROC AUC
         try:
@@ -459,6 +461,8 @@ class DeepLearningModels:
             'f1_weighted': f1_weighted,
             'f1_macro': f1_macro,
             'auc_score': auc_score,
+            'micro_precision': micro_precision,
+            'micro_recall': micro_recall,
             'precision': precision,
             'recall': recall,
             'f1_per_class': f1,
@@ -626,6 +630,14 @@ def main():
     y_val = data['y_val']
     y_test = data['y_test']
     y_train_balanced = data['y_train_balanced']
+
+    # Load TF-IDF based data
+    X_train_mlp = data['X_train_mlp']
+    X_val_mlp = data['X_val_mlp']
+    X_test_mlp = data['X_test_mlp']
+    y_train_mlp = data['y_train_mlp']
+    y_val_mlp = data['y_val_mlp']
+    y_test_mlp = data['y_test_mlp']
     
     # Load metadata
     with open('data/metadata.pkl', 'rb') as f:
@@ -645,16 +657,21 @@ def main():
     print(f"Training with balanced data: {X_text_train_balanced.shape[0]} samples")
     
     # Initialize model builder
-    model_builder = DeepLearningModels(vocab_size, max_len, num_features, num_classes)
+    model_builder = DeepLearningModels(vocab_size, max_len, num_features, num_classes, embedding_dim=128)
     
     # Define models to train
     model_configs = [
+        ('Deep MLP with TF-IDF', lambda: model_builder.create_mlp_model(X_train_mlp.shape[1])),
         ('LSTM Model', model_builder.create_lstm_model),
         ('BiLSTM with Attention', model_builder.create_robust_model),
         ('CNN Model', model_builder.create_cnn_model),
         ('Transformer Model', model_builder.create_transformer_model),
-        ('Hybrid CNN-LSTM', model_builder.create_hybrid_cnn_lstm_model_modified)
+        ('Hybrid CNN-LSTM', model_builder.create_hybrid_cnn_lstm_model)
     ]
+
+    #model_configs = [
+    #    ('CNN Model', model_builder.create_cnn_model)
+    #]
     
     # Train and evaluate all models
     all_results = []
@@ -670,23 +687,40 @@ def main():
         
         print(f"\n{model_name} Architecture:")
         model.summary()
-        
-        # Train model
-        model, history = model_builder.train_model(
-            model, model_name,
-            X_text_train_balanced, X_num_train_balanced, y_train_balanced,
-            X_text_val, X_num_val, y_val,
-            class_weights, epochs=50
-        )
-        
+
+        # Special handling for MLP model (uses different data)
+        if 'MLP' in model_name:
+            # Handle class imbalance for MLP data
+            smote = SMOTE(random_state=42)
+            X_train_mlp_balanced, y_train_mlp_balanced = smote.fit_resample(X_train_mlp, y_train_mlp)
+
+            # Train MLP model
+            model, history = model_builder.train_model_mlp(
+                model, model_name,
+                X_train_mlp_balanced, X_val_mlp, y_train_mlp_balanced, y_val_mlp,
+                class_weights, epochs=50, batch_size=64
+            )
+
+            # Evaluate MLP model
+            results = model_builder.evaluate_model(
+                model, model_name, X_test_mlp, None, y_test_mlp, class_names
+            )
+        else:
+            # Train sequence-based models
+            model, history = model_builder.train_model(
+                model, model_name,
+                X_text_train_balanced, X_num_train_balanced, y_train_balanced,
+                X_text_val, X_num_val, y_val,
+                class_weights, epochs=50
+            )
+            # Evaluate model
+            results = model_builder.evaluate_model(
+                model, model_name, X_text_test, X_num_test, y_test, class_names
+            )
+
         # Plot training history
         model_builder.plot_training_history(model_name)
-        
-        # Evaluate model
-        results = model_builder.evaluate_model(
-            model, model_name, X_text_test, X_num_test, y_test, class_names
-        )
-        
+
         # Plot confusion matrix
         model_builder.plot_confusion_matrix(results, class_names)
         
@@ -698,7 +732,12 @@ def main():
         print(f"F1-Score (Weighted): {results['f1_weighted']:.4f}")
         print(f"F1-Score (Macro): {results['f1_macro']:.4f}")
         print(f"AUC Score: {results['auc_score']:.4f}")
-    
+        print(results.keys())  # Check available keys
+        print(f"Micro-averaged precision: {results['micro_precision']:.4f}")
+        print(f"Micro-average recall: {results['micro_recall']:.4f}")
+        print("Precision:", ", ".join([f"{x:.4f}" for x in results['precision']]))
+        print("Recall:", ", ".join([f"{x:.4f}" for x in results['recall']]))
+
     # Save results
     with open('data/model_results.pkl', 'wb') as f:
         pickle.dump(all_results, f)
@@ -711,7 +750,9 @@ def main():
             'Accuracy': result['accuracy'],
             'F1-Weighted': result['f1_weighted'],
             'F1-Macro': result['f1_macro'],
-            'AUC Score': result['auc_score']
+            'AUC Score': result['auc_score'],
+            'Micro-averaged precision': result['micro_precision'],
+            'Micro-averaged recal': result['micro_recall']
         })
     
     summary_df = pd.DataFrame(summary_data)
@@ -728,7 +769,7 @@ def main():
     # Plot comparison
     plt.figure(figsize=(14, 8))
     
-    metrics = ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score']
+    metrics = ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score', 'Micro-averaged precision', 'Micro-averaged recal']
     x = np.arange(len(summary_df))
     width = 0.2
     

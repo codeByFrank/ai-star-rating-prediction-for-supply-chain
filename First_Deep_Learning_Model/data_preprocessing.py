@@ -9,6 +9,7 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.feature_extraction.text import TfidfVectorizer
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.pipeline import Pipeline as ImbPipeline
@@ -19,6 +20,8 @@ from nltk.stem import WordNetLemmatizer
 import re
 import string
 import warnings
+import pickle
+import os
 
 warnings.filterwarnings('ignore')
 # Download required NLTK data
@@ -42,6 +45,8 @@ class DataPreprocessor:
         self.stop_words = set(stopwords.words('english'))
         self.label_encoders = {}
         self.scaler = StandardScaler()
+        self.tfidf = None
+        self.tokenizer = None
 
     def clean_text(self, text):
         """Clean and preprocess text data"""
@@ -124,6 +129,25 @@ class DataPreprocessor:
 
         return df
 
+    def augment_text_data(self, texts):
+        augmented = []
+        for text in texts:
+            if np.random.rand() > 0.7:  # 30% augmentation chance
+                words = text.split()
+                if len(words) > 3:
+                    try:
+                        idx = np.random.randint(0, len(words))
+                        synonyms = wordnet.synsets(words[idx])
+                        if synonyms:
+                            new_word = synonyms[0].lemmas()[0].name()
+                            words[idx] = new_word
+                    except:
+                        pass
+                augmented.append(' '.join(words))
+            else:
+                augmented.append(text)
+        return augmented
+
     def preprocess_features(self, df):
         """Preprocess all features"""
         print("\nPreprocessing features...")
@@ -132,6 +156,9 @@ class DataPreprocessor:
         print("Cleaning text data...")
         df['ReviewText_clean'] = df['ReviewText'].apply(self.clean_text)
         df['ReviewTitle_clean'] = df['ReviewTitle'].apply(self.clean_text)
+
+        df['ReviewText_clean'] = self.augment_text_data(df['ReviewText_clean'])
+        df['ReviewTitle_clean'] = self.augment_text_data(df['ReviewTitle_clean'])
 
         # Combine text features
         df['combined_text'] = df['ReviewText_clean'] + ' ' + df['ReviewTitle_clean']
@@ -257,10 +284,90 @@ class DataPreprocessor:
                 y_train, y_val, y_test)
 
 
+    def extract_tfidf_features(self, df, max_features=5000):
+        """Extract TF-IDF features from combined text"""
+        print("\nExtracting TF-IDF features...")
+
+        # Combine text features
+        df['combined_text'] = df['ReviewText_clean'] + ' ' + df['ReviewTitle_clean']
+
+        # Initialize TF-IDF vectorizer
+        self.tfidf = TfidfVectorizer(
+            max_features=max_features * 2,
+            ngram_range=(1, 3),  # Include unigrams, bigrams and trigrams
+            min_df=5,  # Ignore rare terms
+            max_df=0.75,  # Ignore overly common terms
+            sublinear_tf=True,  # Use log scaling
+            stop_words='english'
+        )
+
+        # Fit and transform
+        tfidf_features = self.tfidf.fit_transform(df['combined_text'])
+
+        # Convert to dense array (if memory allows)
+        return tfidf_features.toarray()
+
+    def prepare_mlp_data(self, df, test_size=0.2, val_size=0.1):
+        """Prepare data for MLP model with TF-IDF features"""
+        # Extract TF-IDF features
+        X_text = self.extract_tfidf_features(df)
+
+        # Get numerical features
+        numerical_features = [
+            'ReviewCount', 'UserCountry_encoded',
+            'text_length', 'word_count', 'avg_word_length',
+            'exclamation_count', 'question_count', 'upper_case_ratio',
+            'title_text_length', 'title_word_count', 'title_avg_word_length',
+            'title_exclamation_count', 'title_question_count', 'title_upper_case_ratio'
+        ]
+
+        X_num = df[numerical_features].values
+
+        # Combine features
+        X = np.concatenate([X_num, X_text], axis=1)
+        y = df['ReviewRating'].values - 1  # Convert to 0-4
+
+        # Split data
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
+
+        val_size_adjusted = val_size / (1 - test_size)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=val_size_adjusted, random_state=42, stratify=y_temp
+        )
+
+        # Scale numerical features only (TF-IDF is already normalized)
+        num_features = X_num.shape[1]
+        scaler = StandardScaler()
+        X_train[:, :num_features] = scaler.fit_transform(X_train[:, :num_features])
+        X_val[:, :num_features] = scaler.transform(X_val[:, :num_features])
+        X_test[:, :num_features] = scaler.transform(X_test[:, :num_features])
+
+        return X_train, X_val, X_test, y_train, y_val, y_test
+
+    def save_preprocessed_data(self, output_dir='data'):
+        """Save all preprocessing artifacts to disk"""
+        os.makedirs(output_dir, exist_ok=True)
+
+        artifacts = {
+            'label_encoders.pkl': self.label_encoders,
+            'scaler.pkl': self.scaler,
+            'tokenizer.pkl': self.tokenizer,
+            'tfidf.pkl': self.tfidf
+        }
+
+        for filename, obj in artifacts.items():
+            if obj is not None:  # Only save if the object exists
+                with open(os.path.join(output_dir, filename), 'wb') as f:
+                    pickle.dump(obj, f)
+
+        print(f"\nSaved preprocessing artifacts to {output_dir}/ directory")
+
 def main():
     # Create output directories
-    import os
     os.makedirs('charts', exist_ok=True)
+    os.makedirs('data', exist_ok=True)
 
     # Initialize preprocessor
     preprocessor = DataPreprocessor()
@@ -276,6 +383,10 @@ def main():
 
     # Prepare text sequences
     X_text, tokenizer = preprocessor.prepare_text_sequences(df_processed)
+
+    # Prepare TF-IDF features for MLP
+    X_train_mlp, X_val_mlp, X_test_mlp, y_train_mlp, y_val_mlp, y_test_mlp = \
+        preprocessor.prepare_mlp_data(df_processed)
 
     # Prepare target variable
     y = df_processed['ReviewRating'].values - 1  # Convert to 0-4 for neural networks
@@ -308,7 +419,9 @@ def main():
              X_num_train_balanced=X_num_train_balanced,
              X_text_train_balanced=X_text_train_balanced,
              y_train=y_train, y_val=y_val, y_test=y_test,
-             y_train_balanced=y_train_balanced)
+             y_train_balanced=y_train_balanced,
+             X_train_mlp=X_train_mlp, X_val_mlp=X_val_mlp, X_test_mlp=X_test_mlp,
+             y_train_mlp=y_train_mlp, y_val_mlp=y_val_mlp, y_test_mlp=y_test_mlp)
 
     # Save metadata
     metadata = {
@@ -317,21 +430,25 @@ def main():
         'max_sequence_length': X_text.shape[1],
         'num_classes': len(np.unique(y)),
         'class_weights': class_weight_dict,
-        'class_names': ['Rating 1', 'Rating 2', 'Rating 3', 'Rating 4', 'Rating 5']
+        'class_names': ['Rating 1', 'Rating 2', 'Rating 3', 'Rating 4', 'Rating 5'],
+        'tfidf_features': preprocessor.tfidf.get_feature_names_out().shape[0] if preprocessor.tfidf else 0
     }
 
-    import pickle
     with open('data/metadata.pkl', 'wb') as f:
         pickle.dump(metadata, f)
 
     with open('data/tokenizer.pkl', 'wb') as f:
         pickle.dump(tokenizer, f)
 
+    # Save all preprocessing artifacts
+    preprocessor.save_preprocessed_data()
+
     print("\n" + "=" * 50)
     print("Data preprocessing completed successfully!")
     print("=" * 50)
     print(f"Numerical features shape: {X_num_train.shape}")
     print(f"Text features shape: {X_text_train.shape}")
+    print(f"TF-IDF features shape: {X_train_mlp.shape}")
     print(f"Balanced training set size: {len(X_num_train_balanced)}")
     print(f"Class weights: {class_weight_dict}")
 
