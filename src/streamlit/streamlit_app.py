@@ -162,25 +162,33 @@ try:
 except ImportError:
     dill = None
 
+# tolerant unpickler: try pickle → dill (if present) → return None when allowed
 @st.cache_resource(show_spinner=False)
-def load_pickle_any(path: str | Path):
-    """Pickle zuerst, dann dill als Fallback."""
-    path = Path(path)
-    with open(path, "rb") as f:
-        try:
-            return pickle.load(f)
-        except Exception as e_pickle:
-            if dill is None:
-                raise RuntimeError(
-                    f"Failed to load '{path}' with pickle ({e_pickle}). 'dill' is not installed."
-                )
-            f.seek(0)
+def load_pickle_any(path: str, allow_fail: bool = False):
+    try:
+        with open(path, "rb") as f:
             try:
-                return dill.load(f)
-            except Exception as e_dill:
-                raise RuntimeError(
-                    f"Failed to load '{path}'. pickle error: {e_pickle}; dill error: {e_dill}"
-                )
+                return pickle.load(f)  # standard pickle
+            except Exception as e_pickle:
+                if dill is None:
+                    if allow_fail:
+                        return None
+                    raise RuntimeError(
+                        f"Failed to load '{path}' with pickle ({e_pickle}). 'dill' is not installed."
+                    )
+                f.seek(0)
+                try:
+                    return dill.load(f)  # try dill
+                except Exception as e_dill:
+                    if allow_fail:
+                        return None
+                    raise RuntimeError(
+                        f"Failed to load '{path}'. pickle error: {e_pickle}; dill error: {e_dill}"
+                    )
+    except FileNotFoundError:
+        if allow_fail:
+            return None
+        raise
 
 # --------------------------------------------------------------------------------------
 # TEXT PREPROCESS (lightweight – matches your notebooks’ intent)
@@ -439,7 +447,7 @@ elif page.startswith("3)"):
     # try to load processed dataframe for charts
     df_proc = None
     if art["processed_data"]:
-        obj = load_pickle_any(art["processed_data"])
+        obj = load_pickle_any(art["processed_data"],allow_fail=True)
         if isinstance(obj, dict) and "df" in obj:
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
@@ -574,6 +582,7 @@ elif page.startswith("4)"):
                "(`classification_comparison_results.pkl`). No heavy training here.")
 
     # ---------- locate artefacts ----------
+# ---------- locate artefacts (robust across working dirs) ----------
     from pathlib import Path
 
     APP_DIR = Path(__file__).resolve().parent
@@ -596,9 +605,9 @@ elif page.startswith("4)"):
             for rel in relpath_list:
                 cands.append(root / rel)
         return cands
-    
-    extra_model_candidates = []
 
+    # zusätzlich direkt im Modell-Ordner nachsehen (funktioniert auch bei Secrets/ENV Overrides)
+    extra_model_candidates = []
     try:
         extra_model_candidates.append(Path(PATH_MODELS) / "classification_summary.json")
         extra_model_candidates.append(Path(PATH_MODELS) / "classification_comparison_results.pkl")
@@ -629,7 +638,7 @@ elif page.startswith("4)"):
         try:
             with open(sum_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            rows = payload.get("summary", payload)  # unterstützt beide Formate
+            rows = payload.get("summary", payload)
             cmp_df = (
                 pd.DataFrame(rows)
                 .rename(columns={
@@ -643,11 +652,11 @@ elif page.startswith("4)"):
                 .sort_values("Weighted F1", ascending=False)
                 .reset_index(drop=True)
             )
-            # Security: cast to floats
+            # auf Nummer sicher: alle Metriken als float casten
             for c in ["Accuracy","Weighted F1","Macro F1","W. Precision","W. Recall"]:
                 if c in cmp_df.columns:
                     cmp_df[c] = cmp_df[c].astype(float)
-            source_used = f"summary JSON ({sum_path})"
+            source_used = f"summary JSON ({Path(sum_path).as_posix()})"
             st.info("Loaded lightweight summary (no heavy objects).")
         except Exception as e:
             st.warning(f"Could not read summary JSON: {e}")
@@ -655,6 +664,7 @@ elif page.startswith("4)"):
     # ---- 2) fallback: big pickle (optional) ----
     if cmp_df is None and res_path:
         if st.checkbox("Load large comparison pickle (~GB) instead?", value=False):
+            import pickle
             with open(res_path, "rb") as f:
                 all_results = pickle.load(f)
             rows = []
@@ -673,14 +683,20 @@ elif page.startswith("4)"):
                 .sort_values("Weighted F1", ascending=False)
                 .reset_index(drop=True)
             )
-            source_used = f"pickle ({res_path})"
+            source_used = f"pickle ({Path(res_path).as_posix()})"
 
     # ---- 3) nothing found
     if cmp_df is None:
+        looked = [
+            *(str(p) for p in candidates_for(["src/models/classification_summary.json","results/classification_summary.json"])),
+            *(str(p) for p in candidates_for(["src/models/classification_comparison_results.pkl","results/classification_comparison_results.pkl"])),
+            *(str(p) for p in extra_model_candidates),
+        ]
         st.warning(
             "No comparison artifacts found.\n\n"
             "Please export `classification_summary.json` from the notebook (recommended)."
         )
+        st.caption("Looked in:\n" + "\n".join(looked))
         st.stop()
 
     st.caption(f"Loaded: {source_used}")
@@ -696,12 +712,10 @@ elif page.startswith("4)"):
     # ---------- nice ranking table ----------
     st.markdown("#### Model ranking (sorted by **Weighted F1**)")
 
-    # 1) 1-basierten Index setzen und benennen
     df_show = cmp_df.copy()
-    df_show.index = np.arange(1, len(df_show) + 1)
+    df_show.index = np.arange(1, len(df_show) + 1)  # 1-basierter Index
     df_show.index.name = "#"
 
-    # 2) Hervorhebung: beste Werte je Spalte rot + fett
     def _highlight_best_column(col):
         if col.name in ["Accuracy", "Weighted F1", "Macro F1", "W. Precision", "W. Recall"]:
             m = col.max()
@@ -714,15 +728,13 @@ elif page.startswith("4)"):
         .style.apply(_highlight_best_column, axis=0)
     )
 
-    # 3) Höhe dynamisch: zeigt alles in einem scrollbaren Grid
-    row_h, header_h, max_h = 32, 38, 700  # px
+    row_h, header_h, max_h = 32, 38, 700
     height = min(max_h, header_h + row_h * len(df_show))
-
     st.dataframe(styled, use_container_width=True, height=height)
 
     st.markdown("#### Performance overview")
 
-    # ----------  show prepared images  ----------
+    # ---------- Visuals (confusion grid etc.) ----------
     IMG_CANDIDATES = []
     for root in ROOT_CANDIDATES:
         IMG_CANDIDATES += [
@@ -731,9 +743,15 @@ elif page.startswith("4)"):
         ]
 
     shown = False
+    seen = set()
     for p in IMG_CANDIDATES:
+        p = Path(p).resolve()
         if p.exists():
+            key = p.as_posix()
+            if key in seen: 
+                continue
             st.image(str(p), use_container_width=True)
+            seen.add(key)
             shown = True
     if not shown:
         st.info("Place PNGs like `results/confusion_grid_all_models.png` to show them here.")
@@ -900,7 +918,7 @@ elif page.startswith("5)"):
 
     df_proc = None
     if art["processed_data"]:
-        obj = load_pickle_any(art["processed_data"])
+        obj = load_pickle_any(art["processed_data"], allow_fail=True)
         if isinstance(obj, dict) and "df" in obj:
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
