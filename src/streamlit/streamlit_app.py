@@ -39,64 +39,110 @@ except Exception:
 # --------------------------------------------------------------------------------------
 # PATHS & HELPERS
 # --------------------------------------------------------------------------------------
-ROOT = os.getcwd()
-PATH_MODELS_CANDIDATES = ["src/models", "models"]
-PATH_MODELS = next((p for p in PATH_MODELS_CANDIDATES if os.path.isdir(p)), "src/models")
-PATH_DATA_PROCESSED = "src/data/processed/temu_reviews_preprocessed.csv"
+from pathlib import Path
+import os, pickle
+import streamlit as st
+from typing import Tuple, Dict, Optional
+
+# Ankerpunkte relativ zur Datei
+APP_DIR  = Path(__file__).resolve().parent       # .../src/streamlit
+SRC_DIR  = APP_DIR.parent                        # .../src
+PROJ_DIR = SRC_DIR.parent                        # repo root
+
+def _pick_existing(*cands) -> Path:
+    """Gib den ersten existierenden Pfad zurück (ansonsten den ersten Kandidaten für klare Fehlermeldungen)."""
+    for p in cands:
+        p = Path(p)
+        if p.exists():
+            return p
+    return Path(cands[0])
+
+# Haupt-Verzeichnisse/Dateien (mit Fallbacks)
+PATH_MODELS = _pick_existing(
+    SRC_DIR / "models",
+    PROJ_DIR / "src" / "models",
+    Path.cwd() / "src" / "models",
+    Path.cwd() / "models",
+)
+
+PATH_DATA_PROCESSED = _pick_existing(
+    SRC_DIR / "data" / "processed" / "temu_reviews_preprocessed.csv",
+    PROJ_DIR / "src" / "data" / "processed" / "temu_reviews_preprocessed.csv",
+)
+
+PATH_RESULTS = _pick_existing(
+    PROJ_DIR / "results",
+    SRC_DIR / "results",
+    Path.cwd() / "results",
+)
+
+
+# Optional: overrides (env/secrets) — never crash if secrets are missing
+_env_model_dir = os.getenv("MODEL_DIR", None)
+if _env_model_dir:
+    PATH_MODELS = Path(_env_model_dir)
+
+# Access st.secrets only inside a try/except to avoid StreamlitSecretNotFoundError
+_sec_model_dir = None
+try:
+    _sec = st.secrets  # may raise if no secrets.toml exists
+    _sec_model_dir = _sec.get("model_dir", None)
+except Exception:
+    _sec_model_dir = None
+
+if _sec_model_dir:
+    PATH_MODELS = Path(_sec_model_dir)
+
 
 NUM_PREVIEW_ROWS = 10
 DEFAULT_RANDOM_SEED = 42
 
-
-def _exists(p): return os.path.exists(p)
-
+def _exists(p) -> bool:
+    return Path(p).exists()
 
 @st.cache_resource(show_spinner=False)
-def load_pickle(path: str):
-    with open(path, "rb") as f:
+def load_pickle(path: str | Path):
+    with open(Path(path), "rb") as f:
         return pickle.load(f)
 
-
-def load_best_model(path_models: str) -> Tuple[object, dict]:
+def load_best_model(models_dir: str | Path) -> Tuple[object, dict]:
     """
-    Loads the best model from either `best_model.pkl` or `best_classification_model.pkl`.
-    Accepts both:
-      • a dict containing {"estimator": <model>, ...}
-      • a plain pickled estimator object
+    Lädt das beste Modell aus best_model.pkl oder best_classification_model.pkl.
+    Unterstützt:
+      • dict mit {'estimator': <model>, ...}
+      • direkt gepickeltes Estimator-Objekt
     """
+    models_dir = Path(models_dir)
     candidates = ["best_model.pkl", "best_classification_model.pkl"]
     chosen = None
     for name in candidates:
-        p = os.path.join(path_models, name)
-        if _exists(p):
+        p = models_dir / name
+        if p.exists():
             chosen = p
             break
     if not chosen:
         raise FileNotFoundError(
-            f"No best model pickle found in {path_models}. "
-            f"Tried: {', '.join(candidates)}"
+            f"Missing artifacts: ['best_model (pickled)']. Looked in: {models_dir}"
         )
 
     obj = load_pickle(chosen)
     if isinstance(obj, dict) and "estimator" in obj:
         return obj["estimator"], obj
-    # else a bare estimator
     return obj, {"estimator": obj, "model_name": type(obj).__name__}
 
-
-def find_artifacts(path_models: str) -> Dict[str, Optional[str]]:
-    """Return artifact paths or None if missing."""
-    paths = {
-        "tfidf": os.path.join(path_models, "tfidf_vectorizer.pkl"),
-        "scaler": os.path.join(path_models, "scaler.pkl"),
-        "feature_info": os.path.join(path_models, "feature_info.pkl"),
-        "processed_data": os.path.join(path_models, "processed_data.pkl"),
-        "train_test_splits": os.path.join(path_models, "train_test_splits.pkl"),
+def find_artifacts(path_models: str | Path) -> Dict[str, Optional[Path]]:
+    """Gibt Pfade zu Artefakten (oder None) zurück."""
+    path_models = Path(path_models)
+    files = {
+        "tfidf":          path_models / "tfidf_vectorizer.pkl",
+        "scaler":         path_models / "scaler.pkl",
+        "feature_info":   path_models / "feature_info.pkl",
+        "processed_data": path_models / "processed_data.pkl",
+        "train_test_splits": path_models / "train_test_splits.pkl",
     }
-    return {k: (v if _exists(v) else None) for k, v in paths.items()}
+    return {k: (p if p.exists() else None) for k, p in files.items()}
 
-
-def artifact_status_msg(art: Dict[str, Optional[str]], need_model=True) -> Tuple[bool, str]:
+def artifact_status_msg(art: Dict[str, Optional[Path]], need_model=True) -> Tuple[bool, str]:
     missing = []
     if need_model:
         try:
@@ -110,24 +156,23 @@ def artifact_status_msg(art: Dict[str, Optional[str]], need_model=True) -> Tuple
     msg = "All artifacts present." if ok else f"Missing artifacts: {missing}. Looked in: {PATH_MODELS}"
     return ok, msg
 
-
-import pickle
+# dill-Loader beibehalten
 try:
     import dill  # used for processed_data.pkl
 except ImportError:
     dill = None
 
 @st.cache_resource(show_spinner=False)
-def load_pickle_any(path: str):
-    """Load a pickled object. Try pickle first, then dill."""
+def load_pickle_any(path: str | Path):
+    """Pickle zuerst, dann dill als Fallback."""
+    path = Path(path)
     with open(path, "rb") as f:
         try:
             return pickle.load(f)
         except Exception as e_pickle:
             if dill is None:
                 raise RuntimeError(
-                    f"Failed to load '{path}' with pickle ({e_pickle}). "
-                    f"'dill' is not installed."
+                    f"Failed to load '{path}' with pickle ({e_pickle}). 'dill' is not installed."
                 )
             f.seek(0)
             try:
@@ -529,17 +574,52 @@ elif page.startswith("4)"):
                "(`classification_comparison_results.pkl`). No heavy training here.")
 
     # ---------- locate artefacts ----------
-    RES_PICKLES = [
-        os.path.join("src", "models", "classification_comparison_results.pkl"),
-        os.path.join("results", "classification_comparison_results.pkl"),
-    ]
-    SUMMARY_CANDIDATES = [
-        os.path.join("src", "models", "classification_summary.json"),
-        os.path.join("results", "classification_summary.json"),
+    from pathlib import Path
+
+    APP_DIR = Path(__file__).resolve().parent
+    ROOT_CANDIDATES = [
+        Path.cwd(),           # wo streamlit gestartet wurde
+        APP_DIR,              # Ordner der Datei
+        APP_DIR.parent,       # …/src
+        APP_DIR.parent.parent # …/ (Repo-Root)
     ]
 
-    res_path = next((p for p in RES_PICKLES if os.path.exists(p)), None)
-    sum_path = next((p for p in SUMMARY_CANDIDATES if os.path.exists(p)), None)
+    def first_existing(paths):
+        for p in paths:
+            if p and Path(p).exists():
+                return str(p)
+        return None
+
+    def candidates_for(relpath_list):
+        cands = []
+        for root in ROOT_CANDIDATES:
+            for rel in relpath_list:
+                cands.append(root / rel)
+        return cands
+    
+    extra_model_candidates = []
+
+    try:
+        extra_model_candidates.append(Path(PATH_MODELS) / "classification_summary.json")
+        extra_model_candidates.append(Path(PATH_MODELS) / "classification_comparison_results.pkl")
+    except Exception:
+        pass
+
+    # JSON bevorzugt (klein & git-freundlich)
+    sum_path = first_existing(
+        [*candidates_for([
+            "src/models/classification_summary.json",
+            "results/classification_summary.json",
+        ])] + extra_model_candidates
+    )
+
+    # Großer PKL nur als Notlösung (kann fehlen – ist okay)
+    res_path = first_existing(
+        [*candidates_for([
+            "src/models/classification_comparison_results.pkl",
+            "results/classification_comparison_results.pkl",
+        ])] + extra_model_candidates
+    )
 
     cmp_df = None
     source_used = ""
@@ -643,17 +723,20 @@ elif page.startswith("4)"):
     st.markdown("#### Performance overview")
 
     # ----------  show prepared images  ----------
-    st.markdown("#### Visuals")
-    img_candidates = [
-        os.path.join("results", "confusion_grid_all_models.png"),
-        os.path.join("results", "model_bars.png")
-    ]
-    shown = False
-    for path in img_candidates:
-        if os.path.exists(path):
-            st.image(path, use_container_width=True)
-            shown = True
+    IMG_CANDIDATES = []
+    for root in ROOT_CANDIDATES:
+        IMG_CANDIDATES += [
+            root / "results" / "confusion_grid_all_models.png",
+            root / "results" / "model_bars.png",
+        ]
 
+    shown = False
+    for p in IMG_CANDIDATES:
+        if p.exists():
+            st.image(str(p), use_container_width=True)
+            shown = True
+    if not shown:
+        st.info("Place PNGs like `results/confusion_grid_all_models.png` to show them here.")
 
     # ---------- Key hyper-parameters (from params_preview or estimator) ----------
     st.markdown("#### Key hyper-parameters (expand)")
