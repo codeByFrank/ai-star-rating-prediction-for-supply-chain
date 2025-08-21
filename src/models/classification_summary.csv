@@ -1,0 +1,12 @@
+model_name,accuracy,weighted_f1,macro_f1,weighted_precision,weighted_recall,params_preview
+Logistic Regression,0.7129326047358834,0.7146098433091335,0.44739285335390794,0.7168624561252112,0.7129326047358834,"{'C': 1.0, 'class_weight': 'balanced', 'dual': False, 'max_iter': 2000, 'multi_class': 'ovr', 'n_jobs': -1, 'random_state': 42}"
+Random Forest,0.7351548269581056,0.6563419114134696,0.3206494471667204,0.5934089715601409,0.7351548269581056,"{'class_weight': 'balanced', 'max_depth': None, 'n_estimators': 1000, 'n_jobs': -1, 'random_state': 42}"
+XGBoost,0.7544626593806921,0.687386757129049,0.3610010500885935,0.6671627558198538,0.7544626593806921,"{'colsample_bytree': 0.8, 'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 400, 'n_jobs': -1, 'random_state': 42, 'subsample': 0.8}"
+LinearSVC,0.7446265938069216,0.7194028830249395,0.43177222389869224,0.7010640161996793,0.7446265938069216,"{'C': 0.1, 'class_weight': 'balanced', 'dual': 'auto', 'max_iter': 2000, 'multi_class': 'ovr', 'random_state': 42}"
+Gaussian Naive Bayes,0.47176684881602915,0.5227375437646276,0.30838422256435144,0.6121078221687857,0.47176684881602915,{}
+Gradient Boosting,0.7413479052823315,0.677605492659982,0.35549038253822424,0.6515300780608537,0.7413479052823315,"{'learning_rate': 0.05, 'max_depth': 3, 'n_estimators': 300, 'random_state': 42, 'subsample': 0.8}"
+K-Nearest Neighbours,0.6885245901639344,0.6240106417369277,0.31777866940796223,0.607185308262568,0.6885245901639344,"{'metric': 'cosine', 'metric_params': None, 'n_jobs': -1, 'n_neighbors': 10}"
+Decision Tree,0.4491803278688525,0.522171771234947,0.33358927302934854,0.6749012254569089,0.4491803278688525,"{'class_weight': 'balanced', 'max_depth': 12, 'random_state': 42}"
+Hard Voting,0.7610200364298725,0.6950398303846138,0.3711419659351498,0.6730254557515116,0.7610200364298725,"{'n_jobs': -1, 'voting': 'hard'}"
+Soft Voting,0.7646630236794171,0.690438482836716,0.3530160129144592,0.6885097826783441,0.7646630236794171,"{'n_jobs': -1, 'voting': 'soft'}"
+Stacking,0.7326047358834245,0.7248703317083015,0.45170574696655885,0.7192305057811056,0.7326047358834245,"{'cv': {'_type': 'StratifiedKFold', 'n_splits': 4, 'shuffle': True, 'random_state': 42}, 'n_jobs': -1, 'passthrough': True}"

@@ -1,0 +1,163 @@
+{
+  "saved_at": "2025-08-21T16:38:04.600078Z",
+  "summary": [
+    {
+      "model_name": "Logistic Regression",
+      "accuracy": 0.7129326047358834,
+      "weighted_f1": 0.7146098433091335,
+      "macro_f1": 0.44739285335390794,
+      "weighted_precision": 0.7168624561252112,
+      "weighted_recall": 0.7129326047358834,
+      "params_preview": {
+        "C": 1.0,
+        "class_weight": "balanced",
+        "dual": false,
+        "max_iter": 2000,
+        "multi_class": "ovr",
+        "n_jobs": -1,
+        "random_state": 42
+      }
+    },
+    {
+      "model_name": "Random Forest",
+      "accuracy": 0.7351548269581056,
+      "weighted_f1": 0.6563419114134696,
+      "macro_f1": 0.3206494471667204,
+      "weighted_precision": 0.5934089715601409,
+      "weighted_recall": 0.7351548269581056,
+      "params_preview": {
+        "class_weight": "balanced",
+        "max_depth": null,
+        "n_estimators": 1000,
+        "n_jobs": -1,
+        "random_state": 42
+      }
+    },
+    {
+      "model_name": "XGBoost",
+      "accuracy": 0.7544626593806921,
+      "weighted_f1": 0.687386757129049,
+      "macro_f1": 0.3610010500885935,
+      "weighted_precision": 0.6671627558198538,
+      "weighted_recall": 0.7544626593806921,
+      "params_preview": {
+        "colsample_bytree": 0.8,
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "n_estimators": 400,
+        "n_jobs": -1,
+        "random_state": 42,
+        "subsample": 0.8
+      }
+    },
+    {
+      "model_name": "LinearSVC",
+      "accuracy": 0.7446265938069216,
+      "weighted_f1": 0.7194028830249395,
+      "macro_f1": 0.43177222389869224,
+      "weighted_precision": 0.7010640161996793,
+      "weighted_recall": 0.7446265938069216,
+      "params_preview": {
+        "C": 0.1,
+        "class_weight": "balanced",
+        "dual": "auto",
+        "max_iter": 2000,
+        "multi_class": "ovr",
+        "random_state": 42
+      }
+    },
+    {
+      "model_name": "Gaussian Naive Bayes",
+      "accuracy": 0.47176684881602915,
+      "weighted_f1": 0.5227375437646276,
+      "macro_f1": 0.30838422256435144,
+      "weighted_precision": 0.6121078221687857,
+      "weighted_recall": 0.47176684881602915,
+      "params_preview": {}
+    },
+    {
+      "model_name": "Gradient Boosting",
+      "accuracy": 0.7413479052823315,
+      "weighted_f1": 0.677605492659982,
+      "macro_f1": 0.35549038253822424,
+      "weighted_precision": 0.6515300780608537,
+      "weighted_recall": 0.7413479052823315,
+      "params_preview": {
+        "learning_rate": 0.05,
+        "max_depth": 3,
+        "n_estimators": 300,
+        "random_state": 42,
+        "subsample": 0.8
+      }
+    },
+    {
+      "model_name": "K-Nearest Neighbours",
+      "accuracy": 0.6885245901639344,
+      "weighted_f1": 0.6240106417369277,
+      "macro_f1": 0.31777866940796223,
+      "weighted_precision": 0.607185308262568,
+      "weighted_recall": 0.6885245901639344,
+      "params_preview": {
+        "metric": "cosine",
+        "metric_params": null,
+        "n_jobs": -1,
+        "n_neighbors": 10
+      }
+    },
+    {
+      "model_name": "Decision Tree",
+      "accuracy": 0.4491803278688525,
+      "weighted_f1": 0.522171771234947,
+      "macro_f1": 0.33358927302934854,
+      "weighted_precision": 0.6749012254569089,
+      "weighted_recall": 0.4491803278688525,
+      "params_preview": {
+        "class_weight": "balanced",
+        "max_depth": 12,
+        "random_state": 42
+      }
+    },
+    {
+      "model_name": "Hard Voting",
+      "accuracy": 0.7610200364298725,
+      "weighted_f1": 0.6950398303846138,
+      "macro_f1": 0.3711419659351498,
+      "weighted_precision": 0.6730254557515116,
+      "weighted_recall": 0.7610200364298725,
+      "params_preview": {
+        "n_jobs": -1,
+        "voting": "hard"
+      }
+    },
+    {
+      "model_name": "Soft Voting",
+      "accuracy": 0.7646630236794171,
+      "weighted_f1": 0.690438482836716,
+      "macro_f1": 0.3530160129144592,
+      "weighted_precision": 0.6885097826783441,
+      "weighted_recall": 0.7646630236794171,
+      "params_preview": {
+        "n_jobs": -1,
+        "voting": "soft"
+      }
+    },
+    {
+      "model_name": "Stacking",
+      "accuracy": 0.7326047358834245,
+      "weighted_f1": 0.7248703317083015,
+      "macro_f1": 0.45170574696655885,
+      "weighted_precision": 0.7192305057811056,
+      "weighted_recall": 0.7326047358834245,
+      "params_preview": {
+        "cv": {
+          "_type": "StratifiedKFold",
+          "n_splits": 4,
+          "shuffle": true,
+          "random_state": 42
+        },
+        "n_jobs": -1,
+        "passthrough": true
+      }
+    }
+  ]
+}

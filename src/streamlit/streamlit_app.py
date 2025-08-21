@@ -220,22 +220,72 @@ def combine_features(tfidf_vec, scaler, tfidf_texts, numeric_df: Optional[pd.Dat
 # --------------------------------------------------------------------------------------
 # SIDEBAR – NAV
 # --------------------------------------------------------------------------------------
-st.set_page_config(page_title="Customer-Rating Prediction", layout="wide")
-st.sidebar.title("Navigation")
+# --------------------------------------------------------------------------------------
+# PAGE CONFIG + SIDEBAR NAV (icons + credits)
+# --------------------------------------------------------------------------------------
+st.set_page_config(page_title="Star Rating Prediction", page_icon="⭐", layout="wide")
+
+# —— tiny CSS to tighten the radio and polish fonts
+st.markdown("""
+<style>
+/* tighten radio spacing + make labels cleaner */
+section[data-testid="stSidebar"] .stRadio > div { gap: 0.35rem !important; }
+section[data-testid="stSidebar"] label { font-size: 14px !important; }
+section[data-testid="stSidebar"] h3, 
+section[data-testid="stSidebar"] .st-emotion-cache-1y4p8pa { margin-bottom: .25rem !important; }
+/* light divider */
+.sidebar-divider { border-top:1px solid #eaeaea; margin:.5rem 0 1rem 0; }
+/* small header card in the sidebar */
+.sidebar-card {
+  background:#f6f7fb; border:1px solid #e9ecf3; border-radius:10px;
+  padding:10px 12px; margin-bottom:.6rem;
+}
+.sidebar-card-title {
+  display:flex; align-items:center; gap:8px; font-weight:700; color:#2b2f38;
+}
+.sidebar-card-sub { font-size:12px; color:#6b7280; margin-top:2px; }
+.sidebar-credits { font-size:12.5px; line-height:1.45; color:#666; }
+</style>
+""", unsafe_allow_html=True)
+
+# —— small title card INSIDE the sidebar (instead of a big banner in main area)
+st.sidebar.markdown(
+    """
+    <div class="sidebar-card">
+      <div class="sidebar-card-title"><span style="font-size:18px;">⭐</span>Star Rating Prediction</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.sidebar.markdown("### Navigation")
 page = st.sidebar.radio(
     "Go to",
     [
         "1) Introduction",
         "2) Load & Preprocess",
-        "3) Feature Engineering (view)",
-        "4) Train & Compare (optional)",
+        "3) Feature Engineering",
+        "4) Compare Models",
         "5) 100-Sample Evaluation",
         "6) Live Prediction",
-        "7) Conclusion"
+        "7) Conclusion",
     ],
-    index=0
+    index=0,
+    label_visibility="collapsed",  # keeps things tidy
 )
 
+# — credits
+st.sidebar.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div class="sidebar-credits">
+      <b>Created by</b><br/>
+      Frank · Sebastian · Mohamed<br/>
+      DataScientest – Data Science Program
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 # Cache artifacts once per session
 if "art" not in st.session_state:
     st.session_state.art = find_artifacts(PATH_MODELS)
@@ -336,86 +386,322 @@ elif page.startswith("3)"):
     ok, msg = artifact_status_msg(art, need_model=False)
     st.info(msg)
 
-    if art["feature_info"]:
-        finfo = load_pickle(art["feature_info"])
-        st.write("**Numerical feature columns used in training:**")
-        st.code("\n".join(map(str, finfo.get("numerical_features", []))) or "(not found)")
-        st.write(f"TF-IDF feature count: {finfo.get('feature_count', 'n/a')}")
-    else:
-        st.warning("feature_info.pkl not found. (The app will still run if model & vectorizer exist.)")
+    # --- load artifacts we can visualize ---
+    finfo  = load_pickle(art["feature_info"]) if art["feature_info"] else None
+    tfidf  = load_pickle(art["tfidf"])        if art["tfidf"]        else None
+    scaler = load_pickle(art["scaler"])       if art["scaler"]       else None
 
-    if art["tfidf"]:
-        st.success("TF-IDF vectorizer found.")
-    if art["scaler"]:
-        st.success("Scaler found.")
-    if art["processed_data"]:
-        st.success("processed_data.pkl found (contains preprocessed DataFrame).")
-
-
-# --------------------------------------------------------------------------------------
-# 4) TRAIN & COMPARE (OPTIONAL, LIGHT)
-# --------------------------------------------------------------------------------------
-elif page.startswith("4)"):
-    section_header("Train & Compare (optional)", "🏋️")
-    st.write("**Skip this in presentations.** Your saved model will be used. "
-             "Below is a *tiny* baseline training if you explicitly run it.")
-
-    art = st.session_state.art
-    data_source = None
+    # try to load processed dataframe for charts
     df_proc = None
-
     if art["processed_data"]:
-        try:
-            # processed_data.pkl contains a dict with 'df'
-            obj = load_pickle_any(art["processed_data"])
-            df_proc = obj["df"] if isinstance(obj, dict) and "df" in obj else None
-            data_source = "processed_data.pkl"
-        except Exception:
-            df_proc = None
-
+        obj = load_pickle_any(art["processed_data"])
+        if isinstance(obj, dict) and "df" in obj:
+            df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
         try:
             df_proc = pd.read_csv(PATH_DATA_PROCESSED)
-            data_source = PATH_DATA_PROCESSED
         except Exception:
-            pass
+            df_proc = None
 
-    if df_proc is None:
-        st.warning("No processed dataset available for training demo.")
+    # ----------------- NUMERIC FEATURES -----------------
+    if finfo:
+        num_cols = finfo.get("numerical_features", [])
+        st.subheader("Numerical feature columns used in training:")
+        colA, colB = st.columns([1, 2])
+        with colA:
+            st.code("\n".join(map(str, num_cols)) or "(not found)")
+        with colB:
+            # one-liners to explain each numeric feature
+            nice = {
+                "word_count": "How long the review is (words).",
+                "char_count": "Length in characters.",
+                "sentence_count": "How many sentences.",
+                "avg_word_length": "Average characters per word.",
+                "exclamation_count": "Number of exclamation marks (!).",
+                "question_count": "Number of question marks (?).",
+                "capital_ratio": "Share of uppercase letters (INTENSITY).",
+                "sentiment_compound": "VADER overall polarity (−1…+1).",
+                "sentiment_pos": "VADER positive share.",
+                "sentiment_neu": "VADER neutral share.",
+                "sentiment_neg": "VADER negative share.",
+            }
+            bullets = [f"- **{c}** – {nice.get(c,'auxiliary signal.')}" for c in num_cols]
+            st.markdown("\n".join(bullets))
+
+    # ----------------- TF-IDF – SETTINGS & WHY -----------------
+    if tfidf:
+        with st.expander("TF-IDF settings (what & why)", expanded=True):
+            st.code(
+                "TfidfVectorizer(\n"
+                f"  max_features={getattr(tfidf,'max_features', 'n/a')},\n"
+                f"  min_df={getattr(tfidf,'min_df','n/a')}, max_df={getattr(tfidf,'max_df','n/a')},\n"
+                "  stop_words='english',\n"
+                f"  ngram_range={getattr(tfidf,'ngram_range','(1,1)')}\n"
+                ")",
+                language="python",
+            )
+            st.markdown(
+                """
+- **TF-IDF** turns words/phrases into numbers ∝ “how characteristic” a term is for a document.
+- **max_features** keeps only the top terms to prevent overfitting/speed issues.
+- **min_df** drops super-rare typos; **max_df** drops boiler-plate words.
+- **ngram_range (1,2)** = unigrams + bigrams like *“not good”*, which capture context.
+                """
+            )
+
+    # ----------------- TOP WORDS CHART -----------------
+    if tfidf and df_proc is not None and "processed_text" in df_proc:
+        dfv = df_proc[df_proc["processed_text"].astype(str).str.len() > 0].copy()
+        if not dfv.empty:
+            X = tfidf.transform(dfv["processed_text"].astype(str).values)
+            feat = tfidf.get_feature_names_out()
+            mean_tfidf = np.asarray(X.mean(axis=0)).ravel()
+            k = min(30, len(mean_tfidf))
+            top_idx = mean_tfidf.argsort()[-k:][::-1]
+            words = [feat[i] for i in top_idx]
+            scores = [float(mean_tfidf[i]) for i in top_idx]
+
+            fig, ax = plt.subplots(figsize=(9, 5))
+            ax.barh(range(len(words)), scores)
+            ax.set_yticks(range(len(words))); ax.set_yticklabels(words)
+            ax.set_xlabel("Average TF-IDF Score"); ax.set_title("Top 30 Most Important Words")
+            ax.invert_yaxis(); plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+
+        # ---- Top terms per star (quick table) ----
+        if "ReviewRating" in dfv.columns:
+            st.markdown("##### Top terms by rating")
+            def top_for(r, n=8):
+                mask = (dfv["ReviewRating"].astype(int) == r).values
+                if mask.sum() == 0: return []
+                m = np.asarray(X[mask].mean(axis=0)).ravel()
+                idx = m.argsort()[-n:][::-1]
+                return [feat[i] for i in idx]
+            data = {f"{r}★": ", ".join(top_for(r)) for r in [1,2,3,4,5]}
+            st.table(pd.DataFrame(data, index=["Top terms"]).T)
+
+    # ----------------- SCALER EXPLANATION -----------------
+    if scaler and finfo:
+        with st.expander("Numeric scaling", expanded=False):
+            st.markdown(
+                f"""
+We scale numeric features with **StandardScaler** so they are comparable and play nicely with
+linear models. Formula:  \n
+\\( z = (x - \\mu) / \\sigma \\).  \n
+**Shape** expected by the model: {len(finfo.get('numerical_features', []))} numeric columns.
+                """
+            )
+            st.success("Scaler found.")
+    else:
+        if art["scaler"]:
+            st.success("Scaler found.")
+
+    # always show presence flags (kept from your version)
+    if art["tfidf"]:
+        st.success("TF-IDF vectorizer found.")
+    if art["processed_data"]:
+        st.success("processed_data.pkl found (contains preprocessed DataFrame).")
+
+    # ----------------- Optional: tiny 2D projection -----------------
+    if tfidf and df_proc is not None and st.checkbox("Show tiny 2D PCA projection (sample)", value=False):
+        dfs = df_proc.sample(n=min(600, len(df_proc)), random_state=42)
+        Xs = tfidf.transform(dfs["processed_text"].astype(str).values)
+        try:
+            # dense just for the small sample
+            Xdense = Xs.toarray()
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=2, random_state=42)
+            Z = pca.fit_transform(Xdense)
+            fig, ax = plt.subplots(figsize=(6,4))
+            sc = ax.scatter(Z[:,0], Z[:,1], c=dfs["ReviewRating"].astype(int), cmap="viridis", alpha=.6)
+            ax.set_title("2D projection (PCA) – color = rating"); plt.colorbar(sc, ax=ax)
+            st.pyplot(fig, use_container_width=True)
+        except Exception as e:
+            st.info(f"PCA skipped: {e}")
+
+
+# --------------------------------------------------------------------------------------
+# 4) TRAIN & COMPARE (Notebook results, no heavy retraining)
+# --------------------------------------------------------------------------------------
+elif page.startswith("4)"):
+    section_header("Train & Compare (optional)", "🏋️")
+    st.caption("This page reads the comparison results exported by your notebook "
+               "(`classification_comparison_results.pkl`). No heavy training here.")
+
+    # ---------- locate artefacts ----------
+    RES_PICKLES = [
+        os.path.join("src", "models", "classification_comparison_results.pkl"),
+        os.path.join("results", "classification_comparison_results.pkl"),
+    ]
+    SUMMARY_CANDIDATES = [
+        os.path.join("src", "models", "classification_summary.json"),
+        os.path.join("results", "classification_summary.json"),
+    ]
+
+    res_path = next((p for p in RES_PICKLES if os.path.exists(p)), None)
+    sum_path = next((p for p in SUMMARY_CANDIDATES if os.path.exists(p)), None)
+
+    cmp_df = None
+    source_used = ""
+
+    # ---- 1) preferred: small JSON summary ----
+    if sum_path:
+        try:
+            with open(sum_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            rows = payload.get("summary", payload)  # unterstützt beide Formate
+            cmp_df = (
+                pd.DataFrame(rows)
+                .rename(columns={
+                    "model_name": "Model",
+                    "accuracy": "Accuracy",
+                    "weighted_f1": "Weighted F1",
+                    "macro_f1": "Macro F1",
+                    "weighted_precision": "W. Precision",
+                    "weighted_recall": "W. Recall",
+                })
+                .sort_values("Weighted F1", ascending=False)
+                .reset_index(drop=True)
+            )
+            # Security: cast to floats
+            for c in ["Accuracy","Weighted F1","Macro F1","W. Precision","W. Recall"]:
+                if c in cmp_df.columns:
+                    cmp_df[c] = cmp_df[c].astype(float)
+            source_used = f"summary JSON ({sum_path})"
+            st.info("Loaded lightweight summary (no heavy objects).")
+        except Exception as e:
+            st.warning(f"Could not read summary JSON: {e}")
+
+    # ---- 2) fallback: big pickle (optional) ----
+    if cmp_df is None and res_path:
+        if st.checkbox("Load large comparison pickle (~GB) instead?", value=False):
+            with open(res_path, "rb") as f:
+                all_results = pickle.load(f)
+            rows = []
+            for r in all_results:
+                rows.append({
+                    "Model": r.get("model_name", type(r.get("estimator")).__name__),
+                    "Estimator": r.get("estimator"),
+                    "Accuracy": float(r.get("test_accuracy", 0.0)),
+                    "Weighted F1": float(r.get("weighted_f1", 0.0)),
+                    "Macro F1": float(r.get("macro_f1", 0.0)),
+                    "W. Precision": float(r.get("weighted_precision", 0.0)),
+                    "W. Recall": float(r.get("weighted_recall", 0.0)),
+                })
+            cmp_df = (
+                pd.DataFrame(rows)
+                .sort_values("Weighted F1", ascending=False)
+                .reset_index(drop=True)
+            )
+            source_used = f"pickle ({res_path})"
+
+    # ---- 3) nothing found
+    if cmp_df is None:
+        st.warning(
+            "No comparison artifacts found.\n\n"
+            "Please export `classification_summary.json` from the notebook (recommended)."
+        )
         st.stop()
 
-    st.caption(f"Using: {data_source} | shape={df_proc.shape}")
-    dataset_preview(df_proc)
+    st.caption(f"Loaded: {source_used}")
 
-    run_small = st.checkbox("Run a very small Logistic Regression baseline (1–2 minutes)", value=False)
-    if not run_small:
-        st.info("Baseline training **not** executed.")
-        st.stop()
+    best_row = cmp_df.iloc[0]
 
-    # Minimal example: TF-IDF only, to keep it fast
-    if not art["tfidf"]:
-        st.error("Need tfidf_vectorizer.pkl to run this minimal demo.")
-        st.stop()
+    # ---------- header cards ----------
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Champion model", best_row["Model"], "")
+    c2.metric("Weighted F1", f"{best_row['Weighted F1']:.3f}")
+    c3.metric("Accuracy", f"{best_row['Accuracy']:.3f}")
 
-    tfidf = load_pickle(art["tfidf"])
-    X = tfidf.transform(df_proc["processed_text"].astype(str).values)
-    y = df_proc["ReviewRating"].astype(int).values
+    # ---------- nice ranking table ----------
+    st.markdown("#### Model ranking (sorted by **Weighted F1**)")
 
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2,
-                                              random_state=DEFAULT_RANDOM_SEED, stratify=y)
+    # 1) 1-basierten Index setzen und benennen
+    df_show = cmp_df.copy()
+    df_show.index = np.arange(1, len(df_show) + 1)
+    df_show.index.name = "#"
 
-    # NOTE: fix the iloc bug – if y_tr is a Series, index via iloc
-    if isinstance(y_tr, pd.Series):
-        y_tr = y_tr.values
-        y_te = y_te.values
+    # 2) Hervorhebung: beste Werte je Spalte rot + fett
+    def _highlight_best_column(col):
+        if col.name in ["Accuracy", "Weighted F1", "Macro F1", "W. Precision", "W. Recall"]:
+            m = col.max()
+            return ["font-weight:700; color:#c0392b" if v == m else "" for v in col]
+        return [""] * len(col)
 
-    lr = LogisticRegression(max_iter=2000, n_jobs=-1, class_weight="balanced", multi_class="ovr")
-    with st.spinner("Training small baseline…"):
-        lr.fit(X_tr, y_tr)
-    preds = lr.predict(X_te)
-    acc = accuracy_score(y_te, preds)
-    f1w = f1_score(y_te, preds, average="weighted")
-    st.success(f"Baseline LogisticRegression → Acc={acc:.3f}, Weighted F1={f1w:.3f}")
+    styled = (
+        df_show[["Model", "Accuracy", "Weighted F1", "Macro F1", "W. Precision", "W. Recall"]]
+        .round(3)
+        .style.apply(_highlight_best_column, axis=0)
+    )
+
+    # 3) Höhe dynamisch: zeigt alles in einem scrollbaren Grid
+    row_h, header_h, max_h = 32, 38, 700  # px
+    height = min(max_h, header_h + row_h * len(df_show))
+
+    st.dataframe(styled, use_container_width=True, height=height)
+
+    st.markdown("#### Performance overview")
+
+    # ----------  show prepared images  ----------
+    st.markdown("#### Visuals")
+    img_candidates = [
+        os.path.join("results", "confusion_grid_all_models.png"),
+        os.path.join("results", "model_bars.png")
+    ]
+    shown = False
+    for path in img_candidates:
+        if os.path.exists(path):
+            st.image(path, use_container_width=True)
+            shown = True
+
+
+    # ---------- Key hyper-parameters (from params_preview or estimator) ----------
+    st.markdown("#### Key hyper-parameters (expand)")
+
+    def _fmt_val(v):
+        if isinstance(v, dict) and v.get("_type"):
+            t = v["_type"]
+            rest = {k: vv for k, vv in v.items() if k != "_type"}
+            inner = ", ".join(f"{k}={_fmt_val(vv)}" for k, vv in rest.items())
+            return f"{t}({inner})"
+        if isinstance(v, (list, tuple)):
+            return ", ".join(map(str, v))
+        if v is None:
+            return "None"
+        return str(v)
+
+    def _pretty_params(d):
+        if not d:
+            return "(no public params)"
+        lines = []
+        for k, v in d.items():
+            lines.append(f"{k}: {_fmt_val(v)}")
+        return "\n".join(lines)
+
+    for _, row in cmp_df.iterrows():
+        name = str(row["Model"])
+        with st.expander(f"{name} – parameters"):
+            shown = False
+            # (1) bevorzugt: params_preview aus summary JSON
+            if "params_preview" in row and isinstance(row["params_preview"], dict) and row["params_preview"]:
+                st.code(_pretty_params(row["params_preview"]))
+                shown = True
+            # (2) fallback: falls großes PKL geladen und Estimator verfügbar
+            if not shown and "Estimator" in cmp_df.columns:
+                try:
+                    est = row["Estimator"]
+                    params = getattr(est, "get_params", lambda: {})()
+                    # Voting/Stacking: Basismodelle dazu
+                    if hasattr(est, "estimators"):
+                        base_names = [n for n, _ in est.estimators]
+                        params = dict(params)
+                        params["base_estimators"] = base_names
+                    st.code(_pretty_params(params))
+                    shown = True
+                except Exception:
+                    pass
+            if not shown:
+                st.write("No parameter info available for this model.") 
 
 # --------------------------------------------------------------------------------------
 # 5) 100-SAMPLE EVAL (uses saved artifacts)
@@ -666,14 +952,23 @@ elif page.startswith("5)"):
     # ---------- detailed sample predictions ----------
     st.markdown("#### Sample predictions with texts")
     show_n = st.slider("How many rows to show below", 10, 100, 100, step=10)
+
     out = df_s[["ReviewText", "processed_text", "ReviewRating"]].copy()
-    out.rename(columns={"ReviewRating":"True"}, inplace=True)
+    out.rename(columns={"ReviewRating": "True"}, inplace=True)
     out["Predicted"] = y_pred
     out["Adjusted"]  = adj_star
-    st.dataframe(out.head(show_n), use_container_width=True)
 
+    # 👉 1-basierter Index nur für die Anzeige
+    out_display = out.head(show_n).copy()
+    out_display.index = np.arange(1, len(out_display) + 1)
+    out_display.index.name = "#"
+
+    st.dataframe(out_display, use_container_width=True)
+
+    # Download weiterhin ohne Index
     csv = out.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download table as CSV", csv, "sample_predictions.csv", "text/csv")
+
 # --------------------------------------------------------------------------------------
 # 6) LIVE PREDICTION (Notebook-style UI, polished model card)
 # --------------------------------------------------------------------------------------
