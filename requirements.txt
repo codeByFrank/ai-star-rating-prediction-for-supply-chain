@@ -13,7 +13,6 @@ nltk
 wordcloud
 textblob
 spacy
-
 torch
 transformers
-tensorflow==2.15.0
+tensorflow
