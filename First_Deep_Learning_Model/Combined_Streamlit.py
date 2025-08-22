@@ -23,6 +23,22 @@ from sklearn.metrics import (
     accuracy_score, f1_score, classification_report, confusion_matrix, roc_curve, auc
 )
 from scipy.sparse import hstack, csr_matrix
+from pathlib import Path
+
+# ---- robuste Root-Suche (CWD, Dateipfad, darüberliegende Ordner) ----
+APP_DIR = Path(__file__).resolve().parent
+ROOT_CANDIDATES = [Path.cwd(), APP_DIR, APP_DIR.parent, APP_DIR.parent.parent]
+
+def _first_existing(relpaths):
+    """Gib den ersten existierenden Pfad (als str) aus einer Liste relativer Pfade zurück."""
+    if isinstance(relpaths, (str, Path)):
+        relpaths = [relpaths]
+    for root in ROOT_CANDIDATES:
+        for rel in relpaths:
+            p = (root / rel).resolve()
+            if p.exists():
+                return p.as_posix()
+    return None
 
 # WordCloud is optional; app runs without it
 try:
@@ -36,9 +52,12 @@ nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
 
-PATH_MODELS_CANDIDATES = ["src/models", "models"]
-PATH_MODELS = next((p for p in PATH_MODELS_CANDIDATES if os.path.isdir(p)), "src/models")
-PATH_DATA_PROCESSED = "src/data/processed/temu_reviews_preprocessed.csv"
+PATH_MODELS = _first_existing(["src/models", "models"]) or "models"
+PATH_DATA_PROCESSED = _first_existing([
+    "src/data/processed/temu_reviews_preprocessed.csv",
+    "data/processed/temu_reviews_preprocessed.csv"
+])
+
 NUM_PREVIEW_ROWS = 10
 DEFAULT_RANDOM_SEED = 42
 
@@ -212,32 +231,38 @@ stop_words = set(stopwords.words('english'))
 
 
 # Load preprocessing artifacts
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_artifacts():
-    artifacts = {}
-    try:
-        with open('data/metadata.pkl', 'rb') as f:
-            artifacts['metadata'] = pickle.load(f)
-        with open('data/tokenizer.pkl', 'rb') as f:
-            artifacts['tokenizer'] = pickle.load(f)
-        with open('data/scaler.pkl', 'rb') as f:
-            artifacts['scaler'] = pickle.load(f)
-        with open('data/label_encoders.pkl', 'rb') as f:
-            artifacts['label_encoders'] = pickle.load(f)
-    except FileNotFoundError:
-        st.error("Preprocessing artifacts not found. Please run the preprocessing notebook first.")
-        st.stop()
-    return artifacts
+    files = {
+        "metadata":        ["data/metadata.pkl",        "src/data/metadata.pkl",        "metadata.pkl"],
+        "tokenizer":       ["data/tokenizer.pkl",       "src/data/tokenizer.pkl",       "tokenizer.pkl"],
+        "scaler":          ["data/scaler.pkl",          "src/data/scaler.pkl",          "scaler.pkl"],
+        "label_encoders":  ["data/label_encoders.pkl",  "src/data/label_encoders.pkl",  "label_encoders.pkl"],
+    }
+    out = {}
+    for key, rels in files.items():
+        p = _first_existing(rels)
+        if p:
+            with open(p, "rb") as f:
+                out[key] = pickle.load(f)
+        else:
+            out[key] = None  # nicht stoppen – Seiten, die es brauchen, prüfen selbst
+    return out
 
 
 artifacts = load_artifacts()
 
 
 def load_mlp_specific_assets():
-    """Load TF-IDF vectorizer and MLP metadata"""
-    with open('api_models/deep_mlp_with_tf-idf/tfidf.pkl', 'rb') as f:
+    vec_path  = _first_existing(["api_models/deep_mlp_with_tf-idf/tfidf.pkl",
+                                 "src/api_models/deep_mlp_with_tf-idf/tfidf.pkl"])
+    meta_path = _first_existing(["api_models/deep_mlp_with_tf-idf/metadata.json",
+                                 "src/api_models/deep_mlp_with_tf-idf/metadata.json"])
+    if not vec_path or not meta_path:
+        raise FileNotFoundError("TF-IDF/metadata for MLP not found under api_models/…")
+    with open(vec_path, "rb") as f:
         vectorizer = pickle.load(f)
-    with open('api_models/deep_mlp_with_tf-idf/metadata.json', 'r') as f:
+    with open(meta_path, "r", encoding="utf-8") as f:
         mlp_metadata = json.load(f)
     return vectorizer, mlp_metadata
 
@@ -297,13 +322,15 @@ def preprocess_for_mlp(text, vectorizer, num_features):
 # Load models and metadata
 @st.cache_resource
 def load_model_and_metadata(model_name):
-    model_path = f"api_models/{model_name}/model.keras"
-    metadata_path = f"api_models/{model_name}/metadata.json"
-
+    model_path = _first_existing([f"api_models/{model_name}/model.keras",
+                                  f"src/api_models/{model_name}/model.keras"])
+    metadata_path = _first_existing([f"api_models/{model_name}/metadata.json",
+                                     f"src/api_models/{model_name}/metadata.json"])
+    if not model_path or not metadata_path:
+        raise FileNotFoundError(f"Model or metadata for '{model_name}' not found.")
     model = load_model(model_path)
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, 'r', encoding="utf-8") as f:
         metadata = json.load(f)
-
     return model, metadata
 
 
@@ -1394,6 +1421,16 @@ def show_live_prediction_ml_page():
 def show_live_prediction_DL_page():
     st.header("Make a Prediction")
 
+    needed = ["metadata", "tokenizer", "scaler", "label_encoders"]
+    missing = [k for k in needed if artifacts.get(k) is None]
+    if missing:
+        st.error(
+            "Preprocessing artifacts not found: "
+            + ", ".join(missing)
+            + ". Place them under one of: 'data/', 'src/data/' or the repo root."
+        )
+        st.stop()
+
     # Model selection
     model_name = st.selectbox("Select Model", MODEL_NAMES)
     model, metadata = load_model_and_metadata(model_name)
@@ -1708,8 +1745,9 @@ def show_intro_page():
     col1, col2, col3 = st.columns([1, 2, 1])
 
     # Image in the midle
-    with col2:
-        st.image("satisfied-customer.png", width=600)
+    img_path = _first_existing(["satisfied-customer.png", "assets/satisfied-customer.png", "src/satisfied-customer.png"])
+    if img_path:
+        st.image(img_path, width=600)
 
 def show_conclusion_page():
     section_header("Conclusion", "✅")
