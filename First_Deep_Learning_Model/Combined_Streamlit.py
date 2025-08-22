@@ -24,6 +24,7 @@ from sklearn.metrics import (
 )
 from scipy.sparse import hstack, csr_matrix
 from pathlib import Path
+from glob import glob
 
 # ---- robuste Root-Suche (CWD, Dateipfad, darüberliegende Ordner) ----
 APP_DIR = Path(__file__).resolve().parent
@@ -43,35 +44,35 @@ def _first_existing(relpaths):
 import os, json
 from glob import glob
 
+def _bases_for(name: str):
+    """Mögliche Basispfade, unter denen api_models/<name>/ liegen könnte."""
+    for root in ROOT_CANDIDATES:
+        yield (root / "api_models" / name).resolve()
+        yield (root / "src" / "api_models" / name).resolve()
+
 def find_dl_model_path(name: str):
-    patterns = [
-        f"api_models/{name}/model.keras",
-        f"api_models/{name}/*.keras",
-        f"api_models/{name}/*.h5",
-        f"api_models/{name}/*.hdf5",
-        f"api_models/{name}/saved_model",
-        f"src/api_models/{name}/model.keras",
-        f"src/api_models/{name}/*.keras",
-        f"src/api_models/{name}/*.h5",
-        f"src/api_models/{name}/*.hdf5",
-        f"src/api_models/{name}/saved_model",
-    ]
-    for pat in patterns:
-        for p in glob(pat):
-            # SavedModel-Ordner erkennen
-            if os.path.isdir(p):
-                if os.path.exists(os.path.join(p, "saved_model.pb")) or os.path.exists(os.path.join(p, "keras_metadata.pb")):
-                    return p
-            else:
-                return p
+    """Suche .keras/.h5/.hdf5 oder SavedModel-Ordner unter allen Roots."""
+    patterns = ["model.keras", "*.keras", "*.h5", "*.hdf5", "saved_model", "*saved_model*"]
+    for base in _bases_for(name):
+        if not base.exists():
+            continue
+        for pat in patterns:
+            for p in base.glob(pat):
+                if p.is_dir():
+                    # SavedModel-Struktur?
+                    if (p / "saved_model.pb").exists() or (p / "variables").exists():
+                        return p.as_posix()
+                else:
+                    return p.as_posix()
     return None
 
 def find_dl_metadata_path(name: str):
-    for p in [f"api_models/{name}/metadata.json", f"src/api_models/{name}/metadata.json"]:
-        if os.path.exists(p):
-            return p
+    for base in _bases_for(name):
+        p = (base / "metadata.json")
+        if p.exists():
+            return p.as_posix()
     return None
-
+    
 # WordCloud is optional; app runs without it
 try:
     from wordcloud import WordCloud, STOPWORDS
@@ -352,13 +353,13 @@ def preprocess_for_mlp(text, vectorizer, num_features):
 
 
 # Load models and metadata
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_model_and_metadata(model_name):
     model_path = find_dl_model_path(model_name)
     metadata_path = find_dl_metadata_path(model_name)
     if not model_path or not metadata_path:
         raise FileNotFoundError(f"Model or metadata for '{model_name}' not found.")
-    model = load_model(model_path)   # funktioniert mit Datei (.keras/.h5) und Ordner (SavedModel)
+    model = load_model(model_path)  # kann Datei (.keras/.h5) oder Ordner (SavedModel) sein
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
     return model, metadata
@@ -1484,9 +1485,10 @@ def show_live_prediction_DL_page():
         return model_path, meta_path
 
     # Verfügbarkeit je Modell prüfen (Model + Metadata)
-    availability = {name: (find_dl_model_path(name) and find_dl_metadata_path(name)) for name in MODEL_NAMES}
+    availability = {name: bool(find_dl_model_path(name) and find_dl_metadata_path(name))
+                    for name in MODEL_NAMES}
 
-    # Default: erstes VERFÜGBARES Modell, nicht das erste in der Liste
+    # Default = erstes verfügbares Modell (damit kein „unavailable“ vorausgewählt ist)
     default_idx = next((i for i, n in enumerate(MODEL_NAMES) if availability.get(n)), 0)
 
     model_name = st.selectbox(
@@ -1496,15 +1498,19 @@ def show_live_prediction_DL_page():
         format_func=lambda n: f"{n} (unavailable)" if not availability.get(n) else n,
     )
 
-    # Wenn ausgewähltes Modell fehlt → Hinweis & Seite beenden (kein roter Trace)
+    # Wenn das ausgewählte Modell in diesem Deployment fehlt → nur Hinweis, kein Trace
     if not availability.get(model_name):
         st.warning(
-            "This model isn't included in this deployment (likely too large for the repo). "
-            f"Add the files under `api_models/{model_name}/` (e.g. `model.keras`/`.h5` or a `saved_model/` folder, "
-            "plus `metadata.json`)."
+            "This model isn't included in this deployment (likely excluded due to size). "
+            f"Add the files under `api_models/{model_name}/` "
+            "(a `.keras`/`.h5` file or a `saved_model/` folder plus `metadata.json`)."
         )
+        with st.expander("Diagnostics", expanded=False):
+            st.write("Roots searched:", [r.as_posix() for r in ROOT_CANDIDATES])
+            st.write("Tried base folders:", [b.as_posix() for b in _bases_for(model_name)])
+            st.write("Found model path:", find_dl_model_path(model_name))
+            st.write("Found metadata path:", find_dl_metadata_path(model_name))
         return
-
     # ---------- Ab hier: nur wenn das Modell wirklich vorhanden ist ----------
     model, metadata = load_model_and_metadata(model_name)
 
