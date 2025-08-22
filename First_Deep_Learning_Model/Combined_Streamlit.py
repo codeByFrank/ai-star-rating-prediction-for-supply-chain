@@ -40,6 +40,38 @@ def _first_existing(relpaths):
                 return p.as_posix()
     return None
 
+import os, json
+from glob import glob
+
+def find_dl_model_path(name: str):
+    patterns = [
+        f"api_models/{name}/model.keras",
+        f"api_models/{name}/*.keras",
+        f"api_models/{name}/*.h5",
+        f"api_models/{name}/*.hdf5",
+        f"api_models/{name}/saved_model",
+        f"src/api_models/{name}/model.keras",
+        f"src/api_models/{name}/*.keras",
+        f"src/api_models/{name}/*.h5",
+        f"src/api_models/{name}/*.hdf5",
+        f"src/api_models/{name}/saved_model",
+    ]
+    for pat in patterns:
+        for p in glob(pat):
+            # SavedModel-Ordner erkennen
+            if os.path.isdir(p):
+                if os.path.exists(os.path.join(p, "saved_model.pb")) or os.path.exists(os.path.join(p, "keras_metadata.pb")):
+                    return p
+            else:
+                return p
+    return None
+
+def find_dl_metadata_path(name: str):
+    for p in [f"api_models/{name}/metadata.json", f"src/api_models/{name}/metadata.json"]:
+        if os.path.exists(p):
+            return p
+    return None
+
 # WordCloud is optional; app runs without it
 try:
     from wordcloud import WordCloud, STOPWORDS
@@ -322,14 +354,12 @@ def preprocess_for_mlp(text, vectorizer, num_features):
 # Load models and metadata
 @st.cache_resource
 def load_model_and_metadata(model_name):
-    model_path = _first_existing([f"api_models/{model_name}/model.keras",
-                                  f"src/api_models/{model_name}/model.keras"])
-    metadata_path = _first_existing([f"api_models/{model_name}/metadata.json",
-                                     f"src/api_models/{model_name}/metadata.json"])
+    model_path = find_dl_model_path(model_name)
+    metadata_path = find_dl_metadata_path(model_name)
     if not model_path or not metadata_path:
         raise FileNotFoundError(f"Model or metadata for '{model_name}' not found.")
-    model = load_model(model_path)
-    with open(metadata_path, 'r', encoding="utf-8") as f:
+    model = load_model(model_path)   # funktioniert mit Datei (.keras/.h5) und Ordner (SavedModel)
+    with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
     return model, metadata
 
@@ -1453,12 +1483,12 @@ def show_live_prediction_DL_page():
         ])
         return model_path, meta_path
 
-    availability = {name: all(_dl_paths(name)) for name in MODEL_NAMES}
+    # Verfügbarkeit je Modell prüfen (Model + Metadata)
+    availability = {name: (find_dl_model_path(name) and find_dl_metadata_path(name)) for name in MODEL_NAMES}
 
-    # Default-Index = erstes verfügbares Modell (so wird das fehlende nicht sofort ausgewählt)
+    # Default: erstes VERFÜGBARES Modell, nicht das erste in der Liste
     default_idx = next((i for i, n in enumerate(MODEL_NAMES) if availability.get(n)), 0)
 
-    # Markiere fehlende Modelle in der Selectbox
     model_name = st.selectbox(
         "Select Model",
         MODEL_NAMES,
@@ -1466,14 +1496,14 @@ def show_live_prediction_DL_page():
         format_func=lambda n: f"{n} (unavailable)" if not availability.get(n) else n,
     )
 
-    # Wenn ausgewähltes Modell in diesem Deployment fehlt: freundlich abbrechen
+    # Wenn ausgewähltes Modell fehlt → Hinweis & Seite beenden (kein roter Trace)
     if not availability.get(model_name):
         st.warning(
-            "This model isn't included in this deployment (file too large for the repo). "
-            "Clone the repository locally and place the model files under "
-            f"`api_models/{model_name}/` (at least `model.keras` and `metadata.json`)."
+            "This model isn't included in this deployment (likely too large for the repo). "
+            f"Add the files under `api_models/{model_name}/` (e.g. `model.keras`/`.h5` or a `saved_model/` folder, "
+            "plus `metadata.json`)."
         )
-        return  # keine weitere UI/Fehler
+        return
 
     # ---------- Ab hier: nur wenn das Modell wirklich vorhanden ist ----------
     model, metadata = load_model_and_metadata(model_name)
