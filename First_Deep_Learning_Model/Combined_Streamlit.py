@@ -1594,126 +1594,180 @@ def show_data_exploration_page():
 
 
 def show_results():
+    import json
+    from pathlib import Path
+
     st.header("Model Evaluation Results")
 
-    try:
-        # Load the results
-        with open('data/model_results.pkl', 'rb') as f:
-            all_results = pickle.load(f)
+    # ---- kleine Helfer ----
+    def _find_first(paths):
+        for p in paths:
+            if Path(p).exists():
+                return str(p)
+        return None
 
-        # Load test labels for ROC curves
+    def _normalize_summary_df(df_in: pd.DataFrame) -> pd.DataFrame:
+        df = df_in.copy()
+        rename = {
+            "model_name":"Model","model":"Model",
+            "accuracy":"Accuracy","test_accuracy":"Accuracy","acc":"Accuracy",
+            "weighted_f1":"F1-Weighted","f1_weighted":"F1-Weighted",
+            "macro_f1":"F1-Macro","f1_macro":"F1-Macro",
+            "auc_score":"AUC Score","auc":"AUC Score","roc_auc":"AUC Score",
+        }
+        for k, v in rename.items():
+            if k in df.columns and v not in df.columns:
+                df.rename(columns={k:v}, inplace=True)
+        for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        if "Model" not in df.columns:
+            name_col = next((c for c in df.columns if "model" in c.lower()), df.columns[0])
+            df.rename(columns={name_col:"Model"}, inplace=True)
+        sort_col = "F1-Weighted" if "F1-Weighted" in df.columns else ("Accuracy" if "Accuracy" in df.columns else None)
+        if sort_col:
+            df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+        return df
+
+    # ---- 1) bevorzugt: altes Pickle mit allen Details ----
+    pkl_path = _find_first([
+        "data/model_results.pkl","results/model_results.pkl",
+        "models/model_results.pkl","src/models/model_results.pkl"
+    ])
+
+    if pkl_path:
         try:
-            data = np.load('data/preprocessed_data.npz')
-            y_test = data['y_test']
-            has_roc_data = True
-        except:
-            y_test = None
-            has_roc_data = False
+            with open(pkl_path, "rb") as f:
+                all_results = pickle.load(f)
 
-        class_names = ["1", "2", "3", "4", "5"]
+            # y_test für ROC (optional)
+            y_npz = _find_first(["data/preprocessed_data.npz","results/preprocessed_data.npz"])
+            if y_npz:
+                data = np.load(y_npz)
+                y_test = data["y_test"]; has_roc_data = True
+            else:
+                y_test = None; has_roc_data = False
 
-        # Create summary table
-        st.subheader("Performance Summary")
-        summary_data = []
-        for result in all_results:
-            summary_data.append({
-                'Model': result['model_name'],
-                'Accuracy': result['accuracy'],
-                'F1-Weighted': result['f1_weighted'],
-                'F1-Macro': result['f1_macro'],
-                'AUC Score': result['auc_score']
-            })
+            class_names = ["1","2","3","4","5"]
 
-        summary_df = pd.DataFrame(summary_data).sort_values('F1-Weighted', ascending=False)
-        st.dataframe(summary_df.style.format({
-            'Accuracy': '{:.3f}',
-            'F1-Weighted': '{:.3f}',
-            'F1-Macro': '{:.3f}',
-            'AUC Score': '{:.3f}'
-        }))
+            # Tabelle
+            st.subheader("Performance Summary")
+            summary_rows = [{
+                "Model": r.get("model_name"),
+                "Accuracy": r.get("accuracy"),
+                "F1-Weighted": r.get("f1_weighted"),
+                "F1-Macro": r.get("f1_macro"),
+                "AUC Score": r.get("auc_score")
+            } for r in all_results]
+            summary_df = _normalize_summary_df(pd.DataFrame(summary_rows))
+            st.dataframe(summary_df.style.format({
+                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
+            }))
 
-        # Performance Metrics Bar Chart
-        st.subheader("Performance Metrics Comparison")
-        fig1, ax1 = plt.subplots(figsize=(12, 6))
-        metrics = ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score']
-        x = np.arange(len(summary_df))
-        width = 0.2
+            # Balkendiagramm
+            st.subheader("Performance Metrics Comparison")
+            metrics = [c for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"] if c in summary_df.columns]
+            fig1, ax1 = plt.subplots(figsize=(12,6))
+            x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
+            for i, m in enumerate(metrics):
+                ax1.bar(x + i*width, summary_df[m], width, label=m, alpha=0.85)
+            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison')
+            ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
+            ax1.legend(); ax1.grid(True, alpha=.3); st.pyplot(fig1); plt.close(fig1)
 
-        for i, metric in enumerate(metrics):
-            ax1.bar(x + i * width, summary_df[metric], width, label=metric, alpha=0.8)
+            # Confusion Matrices
+            st.subheader("Confusion Matrices")
+            n_models = len(all_results)
+            fig2, axes = plt.subplots(1, n_models, figsize=(6*n_models, 5))
+            if n_models == 1: axes = [axes]
+            for ax, r in zip(axes, all_results):
+                cm = r['confusion_matrix']
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                            xticklabels=class_names, yticklabels=class_names, ax=ax)
+                ax.set_title(r['model_name']); ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
+            st.pyplot(fig2); plt.close(fig2)
 
-        ax1.set_xlabel('Models')
-        ax1.set_ylabel('Score')
-        ax1.set_title('Model Performance Comparison')
-        ax1.set_xticks(x + width * 1.5)
-        ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        st.pyplot(fig1)
-        plt.close(fig1)
+            # ROC (falls Daten vorhanden)
+            if has_roc_data:
+                try:
+                    st.subheader("ROC Curves Comparison")
+                    fig3 = plt.figure(figsize=(10,8))
+                    y_true_bin = label_binarize(y_test, classes=np.arange(len(class_names)))
+                    models_with_proba = [r for r in all_results if 'y_pred_proba' in r]
+                    if models_with_proba:
+                        for r in models_with_proba:
+                            y_pred_proba = np.array(r['y_pred_proba'])
+                            fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
+                            roc_auc = auc(fpr, tpr)
+                            plt.plot(fpr, tpr, label=f"{r['model_name']} (AUC = {roc_auc:.2f})")
+                        plt.plot([0,1],[0,1],'k--'); plt.xlim([0,1]); plt.ylim([0,1.05])
+                        plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+                        plt.title('Micro-average ROC Curve Comparison'); plt.legend(loc="lower right"); plt.grid(True, alpha=.3)
+                        st.pyplot(fig3); plt.close(fig3)
+                    else:
+                        st.warning("No models with prediction probabilities found for ROC curves")
+                except Exception as e:
+                    st.warning(f"Could not generate ROC curves: {e}")
+            else:
+                st.warning("ROC curves not available - test labels data not found")
+            return
+        except Exception as e:
+            st.error(f"Error loading pickle results: {e}")
+            return
 
-        # Confusion Matrices
-        st.subheader("Confusion Matrices")
-        n_models = len(all_results)
-        fig2, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5))
+    # ---- 2) Fallback: Summary aus CSV/JSON (z.B. data/model_comparison_summary.csv) ----
+    csv_path = _find_first([
+        "data/model_comparison_summary.csv",
+        "results/model_comparison_summary.csv",
+        "data/classification_summary.csv",
+        "results/classification_summary.csv",
+        "models/classification_summary.csv",
+        "src/models/classification_summary.csv",
+    ])
+    json_path = _find_first([
+        "src/models/classification_summary.json",
+        "results/classification_summary.json",
+        "data/classification_summary.json",
+        "models/classification_summary.json",
+    ])
 
-        if n_models == 1:
-            axes = [axes]
+    if not csv_path and not json_path:
+        st.error("Results files not found. Looked for: "
+                 "`model_results.pkl`, `model_comparison_summary.csv`, "
+                 "`classification_summary.(json|csv)`.")
+        return
 
-        for ax, result in zip(axes, all_results):
-            cm = result['confusion_matrix']
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                        xticklabels=class_names, yticklabels=class_names, ax=ax)
-            ax.set_title(result['model_name'])
-            ax.set_ylabel('Actual')
-            ax.set_xlabel('Predicted')
+    # Summary laden
+    if json_path:
+        with open(json_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        rows = payload.get("summary", payload)
+        summary_df = _normalize_summary_df(pd.DataFrame(rows))
+        st.caption(f"Loaded summary: {json_path}")
+    else:
+        summary_df = _normalize_summary_df(pd.read_csv(csv_path))
+        st.caption(f"Loaded summary: {csv_path}")
 
-        st.pyplot(fig2)
-        plt.close(fig2)
+    # Anzeige (ohne CM/ROC)
+    st.subheader("Performance Summary")
+    st.dataframe(summary_df.style.format({
+        'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
+    }), use_container_width=True)
 
-        # ROC Curves (only if we have y_test data and prediction probabilities)
-        if has_roc_data:
-            try:
-                st.subheader("ROC Curves Comparison")
-                fig3 = plt.figure(figsize=(10, 8))
+    st.subheader("Performance Metrics Comparison")
+    metrics = [c for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"] if c in summary_df.columns]
+    if metrics:
+        fig1, ax1 = plt.subplots(figsize=(12,6))
+        x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
+        for i, m in enumerate(metrics):
+            ax1.bar(x + i*width, summary_df[m], width, label=m, alpha=0.85)
+        ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison')
+        ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
+        ax1.legend(); ax1.grid(True, alpha=.3); st.pyplot(fig1); plt.close(fig1)
+    else:
+        st.info("No numeric metrics to plot in the loaded summary.")
 
-                # Binarize the output
-                y_true_bin = label_binarize(y_test, classes=np.arange(len(class_names)))
-
-                # Check which models have prediction probabilities
-                models_with_proba = [r for r in all_results if 'y_pred_proba' in r]
-
-                if len(models_with_proba) > 0:
-                    for result in models_with_proba:
-                        y_pred_proba = result['y_pred_proba']
-
-                        # Compute micro-average ROC curve and ROC area
-                        fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
-                        roc_auc = auc(fpr, tpr)
-
-                        plt.plot(fpr, tpr, label=f"{result['model_name']} (AUC = {roc_auc:.2f})")
-
-                    plt.plot([0, 1], [0, 1], 'k--')
-                    plt.xlim([0.0, 1.0])
-                    plt.ylim([0.0, 1.05])
-                    plt.xlabel('False Positive Rate')
-                    plt.ylabel('True Positive Rate')
-                    plt.title('Micro-average ROC Curve Comparison')
-                    plt.legend(loc="lower right")
-                    plt.grid(True, alpha=0.3)
-                    st.pyplot(fig3)
-                    plt.close(fig3)
-                else:
-                    st.warning("No models with prediction probabilities found for ROC curves")
-            except Exception as e:
-                st.warning(f"Could not generate ROC curves: {str(e)}")
-        else:
-            st.warning("ROC curves not available - test labels data not found")
-
-    except FileNotFoundError:
-        st.error("Results files not found. Please run model training first.")
-    except Exception as e:
-        st.error(f"Error loading results: {str(e)}")
+    st.info("Confusion matrices and ROC curves are skipped because they require 'model_results.pkl' with per-model details.")
 
 
 def show_intro_page():
