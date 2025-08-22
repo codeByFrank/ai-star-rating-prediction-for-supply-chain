@@ -804,27 +804,27 @@ def show_compare_models():
     st.markdown("#### Performance overview")
 
     # ---------- Visuals (confusion grid etc.) ----------
-    IMG_CANDIDATES = []
+    from pathlib import Path
+
+    # Nur je Bildname die erste gefundene Datei anzeigen (keine Duplikate)
+    WANTED = ["confusion_grid_all_models.png", "model_bars.png"]
+
+    found_by_name = {}  # name -> Path
     for root in ROOT_CANDIDATES:
-        IMG_CANDIDATES += [
-            root / "results" / "confusion_grid_all_models.png",
-            root / "results" / "model_bars.png",
-        ]
-
-    shown = False
-    seen = set()
-    for p in IMG_CANDIDATES:
-        p = Path(p).resolve()
-        if p.exists():
-            key = p.as_posix()
-            if key in seen:
+        for name in WANTED:
+            if name in found_by_name:
                 continue
-            st.image(str(p), use_container_width=True)
-            seen.add(key)
-            shown = True
-    if not shown:
-        st.info("Place PNGs like `results/confusion_grid_all_models.png` to show them here.")
+            p = (Path(root) / "results" / name).resolve()
+            if p.exists():
+                found_by_name[name] = p
 
+    if found_by_name:
+        for name in WANTED:
+            p = found_by_name.get(name)
+            if p:
+                st.image(p.as_posix(), use_container_width=True)
+    else:
+        st.info("Place PNGs like `results/confusion_grid_all_models.png` to show them here.")
     # ---------- Key hyper-parameters (from params_preview or estimator) ----------
     st.markdown("#### Key hyper-parameters (expand)")
 
@@ -1419,8 +1419,12 @@ def show_live_prediction_ml_page():
 
 
 def show_live_prediction_DL_page():
+    import os, json
+    from pathlib import Path
+
     st.header("Make a Prediction")
 
+    # --- Preprocessing-Checks wie gehabt ---
     needed = ["metadata", "tokenizer", "scaler", "label_encoders"]
     missing = [k for k in needed if artifacts.get(k) is None]
     if missing:
@@ -1431,116 +1435,138 @@ def show_live_prediction_DL_page():
         )
         st.stop()
 
-    # Model selection
-    model_name = st.selectbox("Select Model", MODEL_NAMES)
+    # ---------- Verfügbarkeit der DL-Modelle prüfen ----------
+    def _exists_any(paths):
+        for p in paths:
+            if p and os.path.exists(p):
+                return p
+        return None
+
+    def _dl_paths(name):
+        model_path = _exists_any([
+            f"api_models/{name}/model.keras",
+            f"src/api_models/{name}/model.keras",
+        ])
+        meta_path = _exists_any([
+            f"api_models/{name}/metadata.json",
+            f"src/api_models/{name}/metadata.json",
+        ])
+        return model_path, meta_path
+
+    availability = {name: all(_dl_paths(name)) for name in MODEL_NAMES}
+
+    # Default-Index = erstes verfügbares Modell (so wird das fehlende nicht sofort ausgewählt)
+    default_idx = next((i for i, n in enumerate(MODEL_NAMES) if availability.get(n)), 0)
+
+    # Markiere fehlende Modelle in der Selectbox
+    model_name = st.selectbox(
+        "Select Model",
+        MODEL_NAMES,
+        index=default_idx,
+        format_func=lambda n: f"{n} (unavailable)" if not availability.get(n) else n,
+    )
+
+    # Wenn ausgewähltes Modell in diesem Deployment fehlt: freundlich abbrechen
+    if not availability.get(model_name):
+        st.warning(
+            "This model isn't included in this deployment (file too large for the repo). "
+            "Clone the repository locally and place the model files under "
+            f"`api_models/{model_name}/` (at least `model.keras` and `metadata.json`)."
+        )
+        return  # keine weitere UI/Fehler
+
+    # ---------- Ab hier: nur wenn das Modell wirklich vorhanden ist ----------
     model, metadata = load_model_and_metadata(model_name)
 
-    # Load MLP-specific assets if they exist
-    try:
-        tfidf_vectorizer, mlp_metadata = load_mlp_specific_assets()
-    except:
-        tfidf_vectorizer = None
+    # Nur für das MLP die Zusatzassets versuchen
+    tfidf_vectorizer = None
+    if model_name == "deep_mlp_with_tf-idf":
+        try:
+            tfidf_vectorizer, mlp_metadata = load_mlp_specific_assets()
+        except Exception:
+            tfidf_vectorizer = None  # nicht kritisch für die Seite
 
     # Sample data
     sample_data = {
-        #"ReviewText": "This product is amazing! It exceeded all my expectations.",
         "ReviewText": "This product is very good",
         "ReviewTitle": "Best purchase ever",
         "ReviewCount": 5,
-        "UserCountry": "US"
+        "UserCountry": "US",
     }
 
     # User input form
     with st.form("prediction_form"):
         col1, col2 = st.columns(2)
-
         with col1:
             review_text = st.text_area("Review Text", value=sample_data["ReviewText"], height=150)
             review_count = st.number_input("Review Count", min_value=1, value=sample_data["ReviewCount"])
-
         with col2:
             review_title = st.text_input("Review Title", value=sample_data["ReviewTitle"])
-            user_country = st.selectbox("User Country",
-                                        options=artifacts['label_encoders']['UserCountry'].classes_,
-                                        index=0)
-
+            user_country = st.selectbox(
+                "User Country",
+                options=artifacts['label_encoders']['UserCountry'].classes_,
+                index=0
+            )
         submitted = st.form_submit_button("Predict Rating")
 
-    if submitted:
-        with st.spinner("Processing your review..."):
-            # Preprocess input
-            text_seq, num_features = preprocess_input(
-                review_text, review_title, review_count, user_country
-            )
+    if not submitted:
+        return
 
-            # Prepare inputs for the selected model
-            inputs = preprocess_inputs(model_name, review_text, num_features)
+    with st.spinner("Processing your review..."):
+        # Preprocess input
+        text_seq, num_features = preprocess_input(
+            review_text, review_title, review_count, user_country
+        )
+        # Prepare inputs for the selected model
+        inputs = preprocess_inputs(model_name, review_text, num_features)
 
-            # Display cleaned text
-            st.subheader("Preprocessed Text")
-            cleaned_review = clean_text(review_text)
-            cleaned_title = clean_text(review_title)
+        # Display cleaned text
+        st.subheader("Preprocessed Text")
+        cleaned_review = clean_text(review_text)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Original Review**")
+            st.write(review_text)
+        with col2:
+            st.markdown("**Cleaned Review**")
+            st.write(cleaned_review)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Original Review**")
-                st.write(review_text)
-            with col2:
-                st.markdown("**Cleaned Review**")
-                st.write(cleaned_review)
+        # Make prediction (robust)
+        try:
+            prediction = model.predict(inputs)
+            predicted_class = np.argmax(prediction, axis=1)[0] + 1
+            probabilities = prediction[0]
 
-            # Make prediction
-            try:
-                if model_name == "deep_mlp_with_tf-idf":
-                    # MLP expects single concatenated input
-                    prediction = model.predict(inputs)
-                else:
-                    # Other models expect list of inputs
-                    prediction = model.predict(inputs)
+            st.subheader("Prediction Results")
+            st.write(f"Predicted Rating: {predicted_class} stars")
 
-                # Process prediction results
-                predicted_class = np.argmax(prediction, axis=1)[0] + 1
-                probabilities = prediction[0]
+            fig, ax = plt.subplots()
+            sns.barplot(x=list(range(1, 6)), y=probabilities, ax=ax)
+            ax.set_title("Rating Probability Distribution")
+            ax.set_xlabel("Star Rating"); ax.set_ylabel("Probability")
+            st.pyplot(fig)
 
-                # Display results
-                st.subheader("Prediction Results")
-                st.write(f"Predicted Rating: {predicted_class} stars")
+            st.write(f"Confidence: {probabilities[predicted_class - 1] * 100:.1f}%")
 
-                # Probability distribution
-                fig, ax = plt.subplots()
-                sns.barplot(x=list(range(1, 6)), y=probabilities, ax=ax)
-                ax.set_title("Rating Probability Distribution")
-                ax.set_xlabel("Star Rating")
-                ax.set_ylabel("Probability")
-                st.pyplot(fig)
+            st.subheader("Key Influencing Factors")
+            for i, factor in enumerate(
+                ["Positive sentiment in review", "Review length",
+                 "Use of exclamation marks", "User's review history"], 1
+            ):
+                st.markdown(f"{i}. {factor}")
 
-                # Confidence
-                st.write(f"Confidence: {probabilities[predicted_class - 1] * 100:.1f}%")
-
-                # Show feature importance (placeholder)
-                st.subheader("Key Influencing Factors")
-                factors = [
-                    "Positive sentiment in review",
-                    "Review length",
-                    "Use of exclamation marks",
-                    "User's review history"
-                ]
-                for i, factor in enumerate(factors, 1):
-                    st.markdown(f"{i}. {factor}")
-
-            except Exception as e:
-                st.error(f"Prediction failed: {str(e)}")
-                st.write("Model input requirements:")
-                if hasattr(model, 'input'):
-                    st.json([inp.shape for inp in model.input])
-                else:
-                    st.json(model.input_shape)
-                st.write("What you provided:")
-                if isinstance(inputs, list):
-                    st.json([x.shape for x in inputs])
-                else:
-                    st.json(inputs.shape)
-
+        except Exception as e:
+            st.error(f"Prediction failed: {str(e)}")
+            st.write("Model input requirements:")
+            if hasattr(model, 'input'):
+                st.json([inp.shape for inp in model.input])
+            else:
+                st.json(getattr(model, "input_shape", "n/a"))
+            st.write("What you provided:")
+            if isinstance(inputs, list):
+                st.json([getattr(x, "shape", None) for x in inputs])
+            else:
+                st.json(getattr(inputs, "shape", None))
 
 def show_data_exploration_page():
     st.header("Data Exploration")
@@ -1594,104 +1620,97 @@ def show_data_exploration_page():
 
 
 def show_results():
-    import json
-    from pathlib import Path
+    import os, json
 
     st.header("Model Evaluation Results")
 
-    # ---- kleine Helfer ----
-    def _find_first(paths):
+    # --- Helper ---
+    def _first(paths):
         for p in paths:
-            if Path(p).exists():
-                return str(p)
+            if p and os.path.exists(p):
+                return p
         return None
 
-    def _normalize_summary_df(df_in: pd.DataFrame) -> pd.DataFrame:
-        df = df_in.copy()
-        rename = {
-            "model_name":"Model","model":"Model",
-            "accuracy":"Accuracy","test_accuracy":"Accuracy","acc":"Accuracy",
-            "weighted_f1":"F1-Weighted","f1_weighted":"F1-Weighted",
-            "macro_f1":"F1-Macro","f1_macro":"F1-Macro",
-            "auc_score":"AUC Score","auc":"AUC Score","roc_auc":"AUC Score",
-        }
-        for k, v in rename.items():
-            if k in df.columns and v not in df.columns:
-                df.rename(columns={k:v}, inplace=True)
-        for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-        if "Model" not in df.columns:
-            name_col = next((c for c in df.columns if "model" in c.lower()), df.columns[0])
-            df.rename(columns={name_col:"Model"}, inplace=True)
-        sort_col = "F1-Weighted" if "F1-Weighted" in df.columns else ("Accuracy" if "Accuracy" in df.columns else None)
-        if sort_col:
-            df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
-        return df
+    # =======================
+    # 1) Classical ML RESULTS
+    # =======================
+    try:
+        pkl_path = _first([
+            "data/model_results.pkl",
+            "results/model_results.pkl",
+            "models/model_results.pkl",
+            "src/models/model_results.pkl",
+        ])
 
-    # ---- 1) bevorzugt: altes Pickle mit allen Details ----
-    pkl_path = _find_first([
-        "data/model_results.pkl","results/model_results.pkl",
-        "models/model_results.pkl","src/models/model_results.pkl"
-    ])
-
-    if pkl_path:
-        try:
+        if pkl_path:
             with open(pkl_path, "rb") as f:
                 all_results = pickle.load(f)
 
-            # y_test für ROC (optional)
-            y_npz = _find_first(["data/preprocessed_data.npz","results/preprocessed_data.npz"])
-            if y_npz:
-                data = np.load(y_npz)
-                y_test = data["y_test"]; has_roc_data = True
+            # y_test (optional, für ROC)
+            npz_path = _first(["data/preprocessed_data.npz", "results/preprocessed_data.npz"])
+            if npz_path:
+                data = np.load(npz_path)
+                y_test = data["y_test"]
+                has_roc_data = True
             else:
-                y_test = None; has_roc_data = False
+                y_test = None
+                has_roc_data = False
 
-            class_names = ["1","2","3","4","5"]
+            class_names = ["1", "2", "3", "4", "5"]
 
-            # Tabelle
-            st.subheader("Performance Summary")
-            summary_rows = [{
+            # Summary-Tabelle
+            st.subheader("Performance Summary (Classical ML)")
+            summary_data = [{
                 "Model": r.get("model_name"),
                 "Accuracy": r.get("accuracy"),
                 "F1-Weighted": r.get("f1_weighted"),
                 "F1-Macro": r.get("f1_macro"),
-                "AUC Score": r.get("auc_score")
+                "AUC Score": r.get("auc_score"),
             } for r in all_results]
-            summary_df = _normalize_summary_df(pd.DataFrame(summary_rows))
+            summary_df = pd.DataFrame(summary_data).sort_values(
+                by=("F1-Weighted" if "F1-Weighted" in pd.DataFrame(summary_data).columns else "Accuracy"),
+                ascending=False
+            )
             st.dataframe(summary_df.style.format({
-                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
-            }))
+                'Accuracy': '{:.3f}',
+                'F1-Weighted': '{:.3f}',
+                'F1-Macro': '{:.3f}',
+                'AUC Score': '{:.3f}'
+            }), use_container_width=True)
 
             # Balkendiagramm
-            st.subheader("Performance Metrics Comparison")
-            metrics = [c for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"] if c in summary_df.columns]
-            fig1, ax1 = plt.subplots(figsize=(12,6))
-            x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
-            for i, m in enumerate(metrics):
-                ax1.bar(x + i*width, summary_df[m], width, label=m, alpha=0.85)
-            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison')
-            ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
-            ax1.legend(); ax1.grid(True, alpha=.3); st.pyplot(fig1); plt.close(fig1)
+            st.subheader("Performance Metrics Comparison (ML)")
+            fig1, ax1 = plt.subplots(figsize=(12, 6))
+            metrics = [c for c in ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score'] if c in summary_df.columns]
+            x = np.arange(len(summary_df))
+            width = 0.8 / max(1, len(metrics))
+            for i, metric in enumerate(metrics):
+                ax1.bar(x + i * width, summary_df[metric], width, label=metric, alpha=0.85)
+            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison (ML)')
+            ax1.set_xticks(x + width * (len(metrics) - 1) / 2)
+            ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
+            ax1.legend(); ax1.grid(True, alpha=0.3)
+            st.pyplot(fig1); plt.close(fig1)
 
             # Confusion Matrices
-            st.subheader("Confusion Matrices")
+            st.subheader("Confusion Matrices (ML)")
             n_models = len(all_results)
-            fig2, axes = plt.subplots(1, n_models, figsize=(6*n_models, 5))
-            if n_models == 1: axes = [axes]
-            for ax, r in zip(axes, all_results):
-                cm = r['confusion_matrix']
+            fig2, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5))
+            if n_models == 1:
+                axes = [axes]
+            for ax, result in zip(axes, all_results):
+                cm = result['confusion_matrix']
                 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                             xticklabels=class_names, yticklabels=class_names, ax=ax)
-                ax.set_title(r['model_name']); ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
+                ax.set_title(result['model_name'])
+                ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
             st.pyplot(fig2); plt.close(fig2)
 
-            # ROC (falls Daten vorhanden)
+            # ROC (falls möglich)
             if has_roc_data:
                 try:
-                    st.subheader("ROC Curves Comparison")
-                    fig3 = plt.figure(figsize=(10,8))
+                    st.subheader("ROC Curves Comparison (ML)")
+                    fig3 = plt.figure(figsize=(10, 8))
                     y_true_bin = label_binarize(y_test, classes=np.arange(len(class_names)))
                     models_with_proba = [r for r in all_results if 'y_pred_proba' in r]
                     if models_with_proba:
@@ -1700,74 +1719,73 @@ def show_results():
                             fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
                             roc_auc = auc(fpr, tpr)
                             plt.plot(fpr, tpr, label=f"{r['model_name']} (AUC = {roc_auc:.2f})")
-                        plt.plot([0,1],[0,1],'k--'); plt.xlim([0,1]); plt.ylim([0,1.05])
+                        plt.plot([0, 1], [0, 1], 'k--')
+                        plt.xlim([0, 1]); plt.ylim([0, 1.05])
                         plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
-                        plt.title('Micro-average ROC Curve Comparison'); plt.legend(loc="lower right"); plt.grid(True, alpha=.3)
+                        plt.title('Micro-average ROC Curve Comparison (ML)')
+                        plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
                         st.pyplot(fig3); plt.close(fig3)
                     else:
-                        st.warning("No models with prediction probabilities found for ROC curves")
+                        st.warning("No models with prediction probabilities found for ROC curves (ML)")
                 except Exception as e:
-                    st.warning(f"Could not generate ROC curves: {e}")
-            else:
-                st.warning("ROC curves not available - test labels data not found")
-            return
-        except Exception as e:
-            st.error(f"Error loading pickle results: {e}")
-            return
+                    st.warning(f"Could not generate ROC curves (ML): {e}")
+        else:
+            st.info("No ML pickle found (model_results.pkl). Skipping ML details.")
+    except Exception as e:
+        st.error(f"Error loading ML results: {e}")
 
-    # ---- 2) Fallback: Summary aus CSV/JSON (z.B. data/model_comparison_summary.csv) ----
-    csv_path = _find_first([
-        "data/model_comparison_summary.csv",
-        "results/model_comparison_summary.csv",
-        "data/classification_summary.csv",
-        "results/classification_summary.csv",
-        "models/classification_summary.csv",
-        "src/models/classification_summary.csv",
-    ])
-    json_path = _find_first([
-        "src/models/classification_summary.json",
-        "results/classification_summary.json",
-        "data/classification_summary.json",
-        "models/classification_summary.json",
-    ])
+    # =======================
+    # 2) DEEP LEARNING RESULTS
+    # =======================
+    try:
+        rows = []
+        for name in MODEL_NAMES:
+            meta_path = _first([f"api_models/{name}/metadata.json",
+                                f"src/api_models/{name}/metadata.json"])
+            if not meta_path:
+                continue
+            with open(meta_path, "r", encoding="utf-8") as f:
+                m = json.load(f)
+            rows.append({
+                "Model": m.get("model_name", name),
+                "Accuracy": m.get("test_accuracy") or m.get("accuracy"),
+                "F1-Weighted": m.get("weighted_f1") or m.get("f1_weighted"),
+                "F1-Macro": m.get("macro_f1") or m.get("f1_macro"),
+                "AUC Score": m.get("auc_score") or m.get("auc"),
+            })
 
-    if not csv_path and not json_path:
-        st.error("Results files not found. Looked for: "
-                 "`model_results.pkl`, `model_comparison_summary.csv`, "
-                 "`classification_summary.(json|csv)`.")
-        return
+        st.markdown("---")
+        st.subheader("Performance Summary (Deep Learning)")
 
-    # Summary laden
-    if json_path:
-        with open(json_path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        rows = payload.get("summary", payload)
-        summary_df = _normalize_summary_df(pd.DataFrame(rows))
-        st.caption(f"Loaded summary: {json_path}")
-    else:
-        summary_df = _normalize_summary_df(pd.read_csv(csv_path))
-        st.caption(f"Loaded summary: {csv_path}")
+        if rows:
+            df_dl = pd.DataFrame(rows)
+            sort_col = "F1-Weighted" if "F1-Weighted" in df_dl.columns else ("Accuracy" if "Accuracy" in df_dl.columns else None)
+            if sort_col:
+                df_dl = df_dl.sort_values(sort_col, ascending=False).reset_index(drop=True)
 
-    # Anzeige (ohne CM/ROC)
-    st.subheader("Performance Summary")
-    st.dataframe(summary_df.style.format({
-        'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
-    }), use_container_width=True)
+            st.dataframe(df_dl.style.format({
+                'Accuracy': '{:.3f}',
+                'F1-Weighted': '{:.3f}',
+                'F1-Macro': '{:.3f}',
+                'AUC Score': '{:.3f}',
+            }), use_container_width=True)
 
-    st.subheader("Performance Metrics Comparison")
-    metrics = [c for c in ["Accuracy","F1-Weighted","F1-Macro","AUC Score"] if c in summary_df.columns]
-    if metrics:
-        fig1, ax1 = plt.subplots(figsize=(12,6))
-        x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
-        for i, m in enumerate(metrics):
-            ax1.bar(x + i*width, summary_df[m], width, label=m, alpha=0.85)
-        ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison')
-        ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
-        ax1.legend(); ax1.grid(True, alpha=.3); st.pyplot(fig1); plt.close(fig1)
-    else:
-        st.info("No numeric metrics to plot in the loaded summary.")
-
-    st.info("Confusion matrices and ROC curves are skipped because they require 'model_results.pkl' with per-model details.")
+            # Balkendiagramm DL
+            st.subheader("Performance Metrics Comparison (DL)")
+            metrics = [c for c in ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score'] if c in df_dl.columns]
+            if metrics:
+                fig, ax = plt.subplots(figsize=(12, 6))
+                x = np.arange(len(df_dl)); w = 0.8 / max(1, len(metrics))
+                for i, m in enumerate(metrics):
+                    ax.bar(x + i*w, df_dl[m], w, label=m, alpha=0.85)
+                ax.set_xlabel('Models'); ax.set_ylabel('Score'); ax.set_title('DL Model Performance Comparison')
+                ax.set_xticks(x + w*(len(metrics)-1)/2); ax.set_xticklabels(df_dl['Model'], rotation=45, ha='right')
+                ax.legend(); ax.grid(True, alpha=0.3)
+                st.pyplot(fig); plt.close(fig)
+        else:
+            st.info("No Deep Learning metadata found under api_models/*/metadata.json.")
+    except Exception as e:
+        st.error(f"Error loading Deep Learning results: {e}")
 
 
 def show_intro_page():
