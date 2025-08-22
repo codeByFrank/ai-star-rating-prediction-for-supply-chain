@@ -241,11 +241,74 @@ def load_best_model(path_models: str) -> Tuple[object, dict]:
 
 
 # Set page config
-st.set_page_config(
-    page_title="Customer Satisfaction Prediction",
-    page_icon=":smiley:",
-    layout="wide",
-    initial_sidebar_state="expanded"
+st.set_page_config(page_title="Star Rating Prediction", page_icon="⭐", layout="wide", initial_sidebar_state="expanded")
+
+# ——— CSS (kompakt, wie früher)
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] .stRadio > div { gap: 0.35rem !important; }
+section[data-testid="stSidebar"] label { font-size: 14px !important; }
+section[data-testid="stSidebar"] h3, 
+section[data-testid="stSidebar"] .st-emotion-cache-1y4p8pa { margin-bottom: .25rem !important; }
+.sidebar-divider { border-top:1px solid #eaeaea; margin:.5rem 0 1rem 0; }
+.sidebar-card { background:#f6f7fb; border:1px solid #e9ecf3; border-radius:10px; padding:10px 12px; margin-bottom:.6rem; }
+.sidebar-card-title { display:flex; align-items:center; gap:8px; font-weight:700; color:#2b2f38; }
+.sidebar-card-sub { font-size:12px; color:#6b7280; margin-top:2px; }
+.sidebar-credits { font-size:12.5px; line-height:1.45; color:#666; }
+</style>
+""", unsafe_allow_html=True)
+
+# ——— kleines Titel-Kärtchen in der Sidebar
+st.sidebar.markdown(
+    """
+    <div class="sidebar-card">
+      <div class="sidebar-card-title"><span style="font-size:18px;">⭐</span>Star Rating Prediction</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ============
+# NAVIGATION
+# ============
+# Labels (sichtbar) + Keys (intern)
+PAGES = [
+    ("About",                    "about"),
+    ("1) Introduction",          "intro"),
+    ("2) Load & Preprocess",     "load"),
+    ("3) Data Exploration",      "dataexp"),
+    ("4) Feature Engineering",   "features"),
+    ("5) Compare Models (ML)",   "compare"),
+    ("6) 100-Sample Evaluation", "eval100"),
+    ("7) Live Prediction (ML)",  "live_ml"),
+    ("8) Live Prediction (DL)",  "live_dl"),
+    ("9) Compare Models (DL)",   "results"),
+    ("10) Conclusion",           "conclusion"),
+    
+]
+LABEL_TO_KEY = {label: key for label, key in PAGES}
+
+st.sidebar.markdown("### Navigation")
+selected_label = st.sidebar.radio(
+    "Go to",
+    [label for label, _ in PAGES],
+    index=0,
+    label_visibility="collapsed",
+)
+
+selected_key = LABEL_TO_KEY[selected_label]
+
+# — Credits
+st.sidebar.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div class="sidebar-credits">
+      <b>Created by</b><br/>
+      Frank · Sebastian · Mohamed<br/>
+      DataScientest – Data Science Project
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # Available models
@@ -1657,21 +1720,24 @@ def show_data_exploration_page():
 
 def show_results():
     import os, json
+    from pathlib import Path
 
     st.header("Model Evaluation Results")
 
-    # --- Helper ---
-    def _first(paths):
-        for p in paths:
-            if p and os.path.exists(p):
-                return p
+    # ---- Neu: über ROOT_CANDIDATES suchen (CWD, Dateiverz., Parent, ...) ----
+    def _first_across_roots(relpaths):
+        for root in ROOT_CANDIDATES:              # kommt aus deinem File (wird auch an anderer Stelle benutzt)
+            for rel in relpaths:
+                p = (Path(root) / rel).resolve()
+                if p.exists():
+                    return p.as_posix()
         return None
 
     # =======================
-    # 1) Classical ML RESULTS
+    # 1) Classical DL RESULTS
     # =======================
     try:
-        pkl_path = _first([
+        pkl_path = _first_across_roots([
             "data/model_results.pkl",
             "results/model_results.pkl",
             "models/model_results.pkl",
@@ -1682,20 +1748,21 @@ def show_results():
             with open(pkl_path, "rb") as f:
                 all_results = pickle.load(f)
 
-            # y_test (optional, für ROC)
-            npz_path = _first(["data/preprocessed_data.npz", "results/preprocessed_data.npz"])
+            npz_path = _first_across_roots([
+                "data/preprocessed_data.npz",
+                "results/preprocessed_data.npz",
+                "models/preprocessed_data.npz",
+                "src/models/preprocessed_data.npz",
+            ])
             if npz_path:
                 data = np.load(npz_path)
-                y_test = data["y_test"]
-                has_roc_data = True
+                y_test = data["y_test"]; has_roc_data = True
             else:
-                y_test = None
-                has_roc_data = False
+                y_test = None; has_roc_data = False
 
-            class_names = ["1", "2", "3", "4", "5"]
+            class_names = ["1","2","3","4","5"]
 
-            # Summary-Tabelle
-            st.subheader("Performance Summary (Classical ML)")
+            st.subheader("Performance Summary")
             summary_data = [{
                 "Model": r.get("model_name"),
                 "Accuracy": r.get("accuracy"),
@@ -1708,45 +1775,35 @@ def show_results():
                 ascending=False
             )
             st.dataframe(summary_df.style.format({
-                'Accuracy': '{:.3f}',
-                'F1-Weighted': '{:.3f}',
-                'F1-Macro': '{:.3f}',
-                'AUC Score': '{:.3f}'
+                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
             }), use_container_width=True)
 
-            # Balkendiagramm
-            st.subheader("Performance Metrics Comparison (ML)")
-            fig1, ax1 = plt.subplots(figsize=(12, 6))
-            metrics = [c for c in ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score'] if c in summary_df.columns]
-            x = np.arange(len(summary_df))
-            width = 0.8 / max(1, len(metrics))
+            st.subheader("Performance Metrics Comparison (DL)")
+            fig1, ax1 = plt.subplots(figsize=(12,6))
+            metrics = [c for c in ['Accuracy','F1-Weighted','F1-Macro','AUC Score'] if c in summary_df.columns]
+            x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
             for i, metric in enumerate(metrics):
-                ax1.bar(x + i * width, summary_df[metric], width, label=metric, alpha=0.85)
-            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison (ML)')
-            ax1.set_xticks(x + width * (len(metrics) - 1) / 2)
-            ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
+                ax1.bar(x + i*width, summary_df[metric], width, label=metric, alpha=0.85)
+            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison (DL)')
+            ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
             ax1.legend(); ax1.grid(True, alpha=0.3)
             st.pyplot(fig1); plt.close(fig1)
 
-            # Confusion Matrices
-            st.subheader("Confusion Matrices (ML)")
+            st.subheader("Confusion Matrices (DL)")
             n_models = len(all_results)
-            fig2, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5))
-            if n_models == 1:
-                axes = [axes]
+            fig2, axes = plt.subplots(1, n_models, figsize=(6*n_models,5))
+            if n_models == 1: axes = [axes]
             for ax, result in zip(axes, all_results):
                 cm = result['confusion_matrix']
                 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                             xticklabels=class_names, yticklabels=class_names, ax=ax)
-                ax.set_title(result['model_name'])
-                ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
+                ax.set_title(result['model_name']); ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
             st.pyplot(fig2); plt.close(fig2)
 
-            # ROC (falls möglich)
             if has_roc_data:
                 try:
-                    st.subheader("ROC Curves Comparison (ML)")
-                    fig3 = plt.figure(figsize=(10, 8))
+                    st.subheader("ROC Curves Comparison (DL)")
+                    fig3 = plt.figure(figsize=(10,8))
                     y_true_bin = label_binarize(y_test, classes=np.arange(len(class_names)))
                     models_with_proba = [r for r in all_results if 'y_pred_proba' in r]
                     if models_with_proba:
@@ -1755,20 +1812,19 @@ def show_results():
                             fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
                             roc_auc = auc(fpr, tpr)
                             plt.plot(fpr, tpr, label=f"{r['model_name']} (AUC = {roc_auc:.2f})")
-                        plt.plot([0, 1], [0, 1], 'k--')
-                        plt.xlim([0, 1]); plt.ylim([0, 1.05])
+                        plt.plot([0,1],[0,1],'k--'); plt.xlim([0,1]); plt.ylim([0,1.05])
                         plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
-                        plt.title('Micro-average ROC Curve Comparison (ML)')
+                        plt.title('Micro-average ROC Curve Comparison (DL)')
                         plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
                         st.pyplot(fig3); plt.close(fig3)
                     else:
-                        st.warning("No models with prediction probabilities found for ROC curves (ML)")
+                        st.warning("No models with prediction probabilities found for ROC curves (DL)")
                 except Exception as e:
-                    st.warning(f"Could not generate ROC curves (ML): {e}")
+                    st.warning(f"Could not generate ROC curves (DL): {e}")
         else:
-            st.info("No ML pickle found (model_results.pkl). Skipping ML details.")
+            st.info("No DL pickle found (model_results.pkl). Skipping DL details.")
     except Exception as e:
-        st.error(f"Error loading ML results: {e}")
+        st.error(f"Error loading DL results: {e}")
 
     # =======================
     # 2) DEEP LEARNING RESULTS
@@ -1776,8 +1832,10 @@ def show_results():
     try:
         rows = []
         for name in MODEL_NAMES:
-            meta_path = _first([f"api_models/{name}/metadata.json",
-                                f"src/api_models/{name}/metadata.json"])
+            meta_path = _first_across_roots([
+                f"api_models/{name}/metadata.json",
+                f"src/api_models/{name}/metadata.json",
+            ])
             if not meta_path:
                 continue
             with open(meta_path, "r", encoding="utf-8") as f:
@@ -1800,18 +1858,14 @@ def show_results():
                 df_dl = df_dl.sort_values(sort_col, ascending=False).reset_index(drop=True)
 
             st.dataframe(df_dl.style.format({
-                'Accuracy': '{:.3f}',
-                'F1-Weighted': '{:.3f}',
-                'F1-Macro': '{:.3f}',
-                'AUC Score': '{:.3f}',
+                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
             }), use_container_width=True)
 
-            # Balkendiagramm DL
             st.subheader("Performance Metrics Comparison (DL)")
-            metrics = [c for c in ['Accuracy', 'F1-Weighted', 'F1-Macro', 'AUC Score'] if c in df_dl.columns]
+            metrics = [c for c in ['Accuracy','F1-Weighted','F1-Macro','AUC Score'] if c in df_dl.columns]
             if metrics:
-                fig, ax = plt.subplots(figsize=(12, 6))
-                x = np.arange(len(df_dl)); w = 0.8 / max(1, len(metrics))
+                fig, ax = plt.subplots(figsize=(12,6))
+                x = np.arange(len(df_dl)); w = 0.8/max(1,len(metrics))
                 for i, m in enumerate(metrics):
                     ax.bar(x + i*w, df_dl[m], w, label=m, alpha=0.85)
                 ax.set_xlabel('Models'); ax.set_ylabel('Score'); ax.set_title('DL Model Performance Comparison')
@@ -1827,7 +1881,7 @@ def show_results():
 def show_intro_page():
     st.markdown("""
 
-    <h1 style='color: #1f487e;font-size: 30px; text-align: center;'>Customer Satisfaction <br> (by Temu)</h1>
+    <h1 style='color: #1f487e;font-size: 30px; text-align: center;'>Star Rating Prediction<br>(by Temu)</h1>
     <p style='text-align: center;'></p>
     <hr style="border: 2px solid #1f487e;">
     <p>
@@ -1928,40 +1982,27 @@ def show_about_page():
 
 
 def main():
-    st.sidebar.title("Navigation")
-    app_mode = st.sidebar.radio("Choose a page",
-                                ["About", "Introduction", "Load & Preprocess","Data Exploration",
-                                 "Feature Engineering",
-                                 "Compare Models", "100-Sample Evaluation", "Live Prediction ML",
-                                 "Live Prediction DL",
-                                 "Model Results", "Conclusion"])
-
-    # Cache artifacts once per session
+    # Artefakt-Suche einmal pro Session cachen
     if "art" not in st.session_state:
         st.session_state.art = find_artifacts(PATH_MODELS)
 
-    if app_mode == "About":
-        show_about_page()
-    elif app_mode == "Introduction":
-        show_intro_page()
-    elif app_mode == "Load & Preprocess":
-        show_load_and_preprocess_page()
-    elif app_mode == "Feature Engineering":
-        show_feature_engineering_page()
-    elif app_mode == "Compare Models":
-        show_compare_models()
-    elif app_mode == "100-Sample Evaluation":
-        show_100_sample_evaluation_page()
-    elif app_mode == "Live Prediction ML":
-        show_live_prediction_ml_page()
-    elif app_mode == "Live Prediction DL":
-        show_live_prediction_DL_page()
-    elif app_mode == "Data Exploration":
-        show_data_exploration_page()
-    elif app_mode == "Model Results":
-        show_results()
-    else:
-        show_conclusion_page()
+    # Handler je Seite
+    HANDLERS = {
+        "about":      show_about_page,
+        "intro":      show_intro_page,
+        "load":       show_load_and_preprocess_page,
+        "dataexp":    show_data_exploration_page,
+        "features":   show_feature_engineering_page,
+        "compare":    show_compare_models,
+        "eval100":    show_100_sample_evaluation_page,
+        "live_ml":    show_live_prediction_ml_page,
+        "live_dl":    show_live_prediction_DL_page,
+        "results":    show_results,
+        "conclusion": show_conclusion_page,
+    }
+
+    # ausgewählte Seite ausführen
+    HANDLERS.get(selected_key, show_intro_page)()
 
 
 if __name__ == "__main__":
