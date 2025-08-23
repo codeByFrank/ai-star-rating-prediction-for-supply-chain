@@ -2198,17 +2198,28 @@ def show_results():
     except Exception as e:
         st.error(f"Error loading Deep Learning results: {e}")
 
+def get_intro_image():
+    # Ordner der aktuellen Datei (Combined_Streamlit.py)
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "satisfied-customer.png",
+        here / "assets" / "satisfied-customer.png",
+        here.parent / "satisfied-customer.png",
+        here.parent / "assets" / "satisfied-customer.png",
+        Path.cwd() / "satisfied-customer.png",  # fallback
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 def show_intro_page():
     section_header("Customer Satisfaction from Reviews (Temu)", "📦")
 
     # small centered image (optional)
     import os
-    img_path = "satisfied-customer.png"
-    if os.path.exists(img_path):
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c2:
-            st.image(img_path, width=360)
+
+
 
     st.markdown("""
 ### Introduction
@@ -2273,6 +2284,15 @@ The pipeline highlights issue clusters (e.g., *late delivery*, *poor packaging*,
     c1.metric("Reviews (Temu)", "≈ 14,000")
     c2.metric("Target", "1–5 Stars")
     c3.metric("Demo", "Real-time prediction")
+
+    img_path = get_intro_image()
+    if img_path:
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            st.image(str(img_path), width=360)
+            # st.caption(f"Loaded image: {img_path.name}")  # optional zum Debuggen
+    else:
+        st.caption("Image not found. Place 'satisfied-customer.png' next to Combined_Streamlit.py or in an 'assets/' folder.")
 
 def show_conclusion_page():
     section_header("Conclusion")
