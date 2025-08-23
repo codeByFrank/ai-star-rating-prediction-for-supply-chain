@@ -55,28 +55,22 @@ def _ensure_nltk():
     import nltk
     def _has(path: str) -> bool:
         try:
-            nltk.data.find(path)
-            return True
+            nltk.data.find(path); return True
         except LookupError:
             return False
 
-    # Tokenizer: neue NLTK-Version sucht oft 'punkt_tab', sonst 'punkt'
+    # punkt_tab (neuere NLTK) oder punkt (ältere)
     if not (_has("tokenizers/punkt_tab") or _has("tokenizers/punkt")):
         for pkg, path in [("punkt_tab", "tokenizers/punkt_tab"), ("punkt", "tokenizers/punkt")]:
             try:
                 nltk.download(pkg, quiet=True)
-                if _has(path):
-                    break
+                if _has(path): break
             except Exception:
                 pass
 
-    # Weitere Ressourcen (still & robust)
-    if not _has("corpora/stopwords"):
-        nltk.download("stopwords", quiet=True)
-    if not _has("corpora/wordnet"):
-        nltk.download("wordnet", quiet=True)
-    if not _has("sentiment/vader_lexicon"):
-        nltk.download("vader_lexicon", quiet=True)
+    if not _has("corpora/stopwords"): nltk.download("stopwords", quiet=True)
+    if not _has("corpora/wordnet"):   nltk.download("wordnet", quiet=True)
+    if not _has("sentiment/vader_lexicon"): nltk.download("vader_lexicon", quiet=True)
 
 
 def find_dl_model_path(name: str):
@@ -648,6 +642,8 @@ def show_preprocess_page():
         from nltk.corpus import stopwords
         from nltk.tokenize import word_tokenize
 
+        _ensure_nltk()
+        
         lemm = WordNetLemmatizer()
         stop_words = set(stopwords.words("english"))
 
@@ -667,9 +663,19 @@ def show_preprocess_page():
                 return s
             except Exception:
                 return x
-
+        
+        from nltk.tokenize import wordpunct_tokenize, word_tokenize
         def tok_stop_lemma(x):
-            toks = word_tokenize(str(x))
+            s = str(x)
+            try:
+                toks = word_tokenize(s)  # „schöner“, aber braucht punkt(_tab)
+            except LookupError:
+                # Fallback ohne punkt/punkt_tab
+                toks = wordpunct_tokenize(s)  # trennt an Wort-/Satzzeichen, keine Downloads
+            except Exception:
+                # Ultimativer Fallback
+                toks = re.findall(r"[A-Za-z]+", s)
+
             toks = [t for t in toks if t not in stop_words and len(t) > 2]
             toks = [lemm.lemmatize(t) for t in toks]
             return " ".join(toks)
@@ -716,6 +722,7 @@ def show_preprocess_page():
             except Exception:
                 for c in ["sentiment_compound", "sentiment_pos", "sentiment_neu", "sentiment_neg"]:
                     df[c] = 0.0
+
         df = df.loc[:, ~df.columns.duplicated()]
         return df
 
