@@ -296,7 +296,6 @@ st.sidebar.markdown(
 # ============
 # Labels (sichtbar) + Keys (intern)
 PAGES = [
-    ("0) About",              "about"),
     ("1) Introduction",          "intro"),
     ("2) Load Data",             "load"),
     ("3) Data Exploration",      "dataexp"),
@@ -307,6 +306,7 @@ PAGES = [
     ("8) Live Prediction (ML)",  "live_ml"),
     ("9) Live Prediction (DL)",  "live_dl"),
     ("10) Compare Models (DL)",  "results"),
+    ("About",              "about"),
     
 ]
 LABEL_TO_KEY = {label: key for label, key in PAGES}
@@ -2181,37 +2181,43 @@ def show_results():
 
 
 def show_intro_page():
+    section_header("Customer Satisfaction from Reviews (Temu)", "📦")
+
+    # --- kleines, zentriertes Bild (ohne extra CSS/Wrapper) ---
+    import os
+    img_path = "satisfied-customer.png"
+    if os.path.exists(img_path):
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            st.image(img_path, width=320)
+
+    # --- Text ---
     st.markdown("""
+**Context & motivation**  
+Online marketplaces live and die by customer reviews. For supply-chain teams, reviews surface recurring issues—delivery delays, damaged goods, wrong items, pricing, and durability. Reading thousands of free-text comments manually is slow and inconsistent; we need tooling that summarizes signal quickly and reliably.
 
-    <h1 style='color: #1f487e;font-size: 30px; text-align: center;'>Star Rating Prediction<br>(by Temu)</h1>
-    <p style='text-align: center;'></p>
-    <hr style="border: 2px solid #1f487e;">
-    <p>
-    In today’s competitive marketplace, <strong>customer satisfaction</strong> is no longer optional—it is a key driver of success.
-    <p>
-    Customer-generated <strong>reviews and ratings</strong> are powerful tools that help businesses understand what their clients expect, 
-    value, and dislike. 
-    <p>
-    By leveraging this feedback and keeping a close eye on satisfaction levels, companies can adapt to 
-    evolving needs, deliver a better user experience, and fine-tune their services—reducing customer churn in the process.             
-    <p>
-    When satisfaction improves, loyalty grows, often leading to stronger long-term revenue.
-    <p>          
-    The real challenge, however, is being able to analyze the large amount of customer feedback quickly and effectively.
-    <p>
+**Dataset & scope**  
+We initially scraped AliExpress (~57k) and Wish (~99k), but training at that scale was impractical for local resources. On our mentor’s advice that ~10k observations are sufficient, we pivoted to **Temu** and collected ~14k English-language Trustpilot reviews. Temu’s ratings are strongly polarized (many 1★ and 5★), which is ideal for testing class-imbalance strategies.
 
-    <br>
-    </p>
-    """, unsafe_allow_html=True)
+**Objectives**
+1. Scrape, clean, and explore the Temu review corpus.  
+2. Predict **1–5 star ratings from free text** (multi-class classification).  
+3. Compare baseline ML vs. deep models under class imbalance.  
+4. Ship a **live demo** that instantly returns a rating and sentiment group for new text.
 
+**Design decisions**
+- Moved from **regression to classification** to align directly with star labels and business usage.  
+- Explored automated reply templates driven by predicted sentiment (interesting, but out of scope for this app).  
+- Favor transparent features (TF-IDF + light text signals) with a champion model and robust fallbacks.
 
-    # 3 columns
-    col1, col2, col3 = st.columns([1, 2, 1])
+**Why it matters for supply chain**  
+The pipeline highlights clusters of issues (e.g., *late delivery*, *poor packaging*, *not as described*) and turns raw feedback into actionable monitoring for quality and logistics—helping teams respond faster and prioritize fixes that lift satisfaction.
+""")
 
-    # Image in the midle
-    img_path = _first_existing(["satisfied-customer.png", "assets/satisfied-customer.png", "src/satisfied-customer.png"])
-    if img_path:
-        st.image(img_path, width=600)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Reviews (Temu)", "≈ 14,000")
+    c2.metric("Target", "1–5 Stars")
+    c3.metric("Demo", "Real-time prediction")
 
 def show_conclusion_page():
     section_header("Conclusion", "✅")
@@ -2236,51 +2242,31 @@ def show_conclusion_page():
 
 
 def show_about_page():
-    st.header("About This App")
+    section_header("About this App", "ℹ️")
+
     st.markdown("""
-    ### Customer Satisfaction Prediction App
+**What it does**  
+This app predicts customer satisfaction (**1–5 stars**) from review text. It also groups predictions into **negative / neutral / positive** for fast triage.
 
-    This application predicts customer satisfaction ratings (1-5 stars) based on:
-    - Review text content
-    - Review title
-    - User metadata (country, review count)
-    - Text features (length, sentiment, punctuation, etc.)
+**How it works**
+- **Preprocessing:** light text cleaning, optional emoji mapping, basic text features (length, punctuation, capitalization), optional VADER sentiment.
+- **Models:** classical ML with TF-IDF + numeric features (champion with robust fallbacks) and deep-learning variants (e.g., LSTM, BiLSTM-Attention, CNN, Transformer, Deep MLP with TF-IDF).
+- **UI:** load data → explore → preprocess → inspect artifacts → compare models → evaluate → live prediction.
 
-    ### How It Works
-    1. The app preprocesses the input text (cleaning, tokenization)
-    2. Extracts numerical features from the text and user data
-    3. Uses a trained deep learning model to predict the rating
+**Why it’s useful**
+- Surfaces supply-chain issues in real time (delivery, packaging, quality, pricing).
+- Reduces manual reading; standardizes decisions under class imbalance.
 
-    ### Model Architecture
-    The prediction model uses a hybrid architecture combining:
-    - Text processing with LSTM/Transformer layers
-    - Numerical feature processing with dense layers
+**Available model families**
+- Deep MLP (TF-IDF), LSTM, BiLSTM-Attention, CNN, Transformer, Hybrid CNN-LSTM  
+- Classical baselines (e.g., Logistic Regression / Linear SVC / Stacking)
 
-    ### Available Models
-    The app supports multiple model architectures:
-    - Deep MLP with TF-IDF
-    - LSTM Model
-    - BiLSTM with Attention
-    - CNN Model
-    - Transformer Model
-    - Hybrid CNN-LSTM
+**Data source**
+- English-language Temu reviews from Trustpilot (~14k)
 
-    ### Data Source
-    The model was trained on customer reviews from [Trustpilot/Temu](https://www.trustpilot.com/review/temu.com).
-    """)
-
-    st.subheader("Technical Details")
-    st.write("""
-    - **Preprocessing:** Text cleaning, tokenization, feature extraction
-    - **Model Training:** 6 different architectures compared
-    - **Evaluation Metrics:** Accuracy, F1-score, AUC-ROC
-    """)
-
-    st.subheader("Development Team")
-    st.write("""
-    - Data Scientists: [Mohamed ,Sebastian, Frank]
-    - Machine Learning Engineer: [Mohamed ,Sebastian, Frank]
-    """)
+**Team**
+- Frank · Sebastian · Mohamed – DataScientest Project
+""")
 
 
 def main():
