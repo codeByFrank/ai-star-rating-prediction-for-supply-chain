@@ -273,17 +273,17 @@ st.sidebar.markdown(
 # ============
 # Labels (sichtbar) + Keys (intern)
 PAGES = [
-    ("About",                    "about"),
+    ("0) About",              "about"),
     ("1) Introduction",          "intro"),
-    ("2) Load & Preprocess",     "load"),
+    ("2) Load Data",             "load"),
     ("3) Data Exploration",      "dataexp"),
-    ("4) Feature Engineering",   "features"),
-    ("5) Compare Models (ML)",   "compare"),
-    ("6) 100-Sample Evaluation", "eval100"),
-    ("7) Live Prediction (ML)",  "live_ml"),
-    ("8) Live Prediction (DL)",  "live_dl"),
-    ("9) Compare Models (DL)",   "results"),
-    ("10) Conclusion",           "conclusion"),
+    ("4) Preprocess",            "preprocess"),
+    ("5) Feature Engineering",   "features"),
+    ("6) Compare Models (ML)",        "compare"),
+    ("7) 100-Sample Evaluation", "eval100"),
+    ("8) Live Prediction (ML)",  "live_ml"),
+    ("9) Live Prediction (DL)",  "live_dl"),
+    ("10) Compare Models (DL)",  "results"),
     
 ]
 LABEL_TO_KEY = {label: key for label, key in PAGES}
@@ -523,15 +523,16 @@ def combine_features(tfidf_vec, scaler, tfidf_texts, numeric_df: Optional[pd.Dat
     return hstack([X_tfidf, X_num_scaled])
 
 
-def show_load_and_preprocess_page():
-    section_header("Load & Preprocess", "📦")
-    st.write("Upload a **raw** CSV (with at least `ReviewText` and `ReviewRating`) "
-             "or skip to use the preprocessed file at "
-             f"`{PATH_DATA_PROCESSED}` if present.")
+# ---------- PAGE: Load Data (leicht) ----------
+def show_load_page():
+    section_header("Load Data", "📥")
+    st.write("Upload a **raw** CSV (mind. `ReviewText`, `ReviewRating`). "
+             f"Für die Vorschau wird – falls nötig – ein leichtes `processed_text` on-the-fly erzeugt.")
 
     up = st.file_uploader("Upload raw CSV", type=["csv"])
     df = None
 
+    # 1) Upload bevorzugt
     if up is not None:
         try:
             df = pd.read_csv(up)
@@ -539,49 +540,173 @@ def show_load_and_preprocess_page():
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
 
-    if df is None and _exists(PATH_DATA_PROCESSED):
-        try:
-            df = pd.read_csv(PATH_DATA_PROCESSED)
-            st.success(f"Loaded existing processed dataset: {PATH_DATA_PROCESSED} (shape {df.shape}).")
-        except Exception as e:
-            st.error(f"Could not load default processed CSV: {e}")
+    # 2) Falls nichts hochgeladen: versuche typische Roh-Pfade
+    if df is None:
+        for cand in ["data/temu_reviews.csv", "src/data/temu_reviews.csv",
+                     "data/raw/temu_reviews.csv", "src/data/raw/temu_reviews.csv"]:
+            if os.path.exists(cand):
+                try:
+                    df = pd.read_csv(cand)
+                    st.info(f"Loaded fallback raw dataset: `{cand}` (shape {df.shape}).")
+                    break
+                except Exception:
+                    pass
 
     if df is None:
-        st.warning("No data loaded yet.")
+        st.warning("No raw data found. Please upload a CSV.")
         st.stop()
 
-    # Ensure key columns
-    if "ReviewText" not in df.columns:
-        st.error("Column `ReviewText` missing.")
-        st.stop()
-    if "ReviewRating" not in df.columns:
-        st.error("Column `ReviewRating` missing.")
+    # Pflichtspalten prüfen
+    need = {"ReviewText", "ReviewRating"}
+    miss = [c for c in need if c not in df.columns]
+    if miss:
+        st.error(f"Missing required columns: {miss}")
         st.stop()
 
-    # Create processed_text if missing
+    # Für Vorschau: processed_text erzeugen (leicht)
     if "processed_text" not in df.columns:
-        st.info("Creating `processed_text` (basic clean)…")
         df["processed_text"] = df["ReviewText"].astype(str).apply(clean_text_basic)
 
-    # Quick summary + preview
+    # KPIs + Vorschau
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Rows", len(df))
-    with c2:
-        st.metric("Avg. text length", int(df["processed_text"].str.len().mean()))
-    with c3:
-        st.metric("Distinct ratings", df["ReviewRating"].nunique())
-
+    c1.metric("Rows", len(df))
+    c2.metric("Avg. text length", int(df["processed_text"].str.len().mean()))
+    c3.metric("Distinct ratings", int(df["ReviewRating"].nunique()))
     dataset_preview(df, "Top rows")
 
+    # Wordclouds (leicht, aus processed_text)
     st.markdown("#### Wordclouds by sentiment group")
     neg, neu, pos = build_neg_neu_pos_text(df)
     plot_wordclouds(neg, neu, pos)
 
-    # Option to save processed CSV
+    # In Session parken für die nächste Seite
+    st.session_state["raw_df"] = df.copy()
+    st.success("Raw dataset cached for preprocessing.")
+
+# ---------- PAGE: Preprocess (bewusst „schwer“) ----------
+def show_preprocess_page():
+    section_header("Preprocess", "🧪")
+
+    # Quelle festlegen
+    df_raw = st.session_state.get("raw_df")
+    if df_raw is None:
+        # Fallback: bereits vorhandene Preprocessed-Datei
+        if os.path.exists(PATH_DATA_PROCESSED):
+            st.info(f"No raw_df in session. Using `{PATH_DATA_PROCESSED}` as input.")
+            df_raw = pd.read_csv(PATH_DATA_PROCESSED)
+        else:
+            st.warning("No input data found. Please go to **Load Data** first.")
+            st.stop()
+
+    # Optionen
+    st.subheader("Options")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        do_emoji = st.checkbox("Map emojis → sentiments", value=True)
+    with c2:
+        do_vader = st.checkbox("Add VADER sentiment features", value=True)
+    with c3:
+        sample_n = st.number_input("Sample (0 = all)", min_value=0, value=0, step=1000)
+
+    # Pipeline (gecached)
+    @st.cache_data(show_spinner=False)
+    def _preprocess_df(df_in, do_emoji_, do_vader_):
+        import re
+        from nltk.stem import WordNetLemmatizer
+        from nltk.corpus import stopwords
+        from nltk.tokenize import word_tokenize
+
+        lemm = WordNetLemmatizer()
+        stop_words = set(stopwords.words("english"))
+
+        def remove_special_chars(x):
+            x = re.sub(r"[^a-zA-Z\s]", " ", str(x))
+            return re.sub(r"\s+", " ", x).strip()
+
+        def emoji_to_sentiment(x):
+            if not do_emoji_:
+                return x
+            try:
+                from emoji import demojize
+                s = demojize(str(x).lower())
+                s = re.sub(r":\w*?(smil|grin|laugh|heart|thumbs_up|star|party|kiss)\w*?:", " positive_emoji ", s)
+                s = re.sub(r":\w*?(angry|cry|sad|thumbs_down|sick|vomit|rage|poop|devil|skull)\w*?:", " negative_emoji ", s)
+                s = re.sub(r":[a-z_]+:", " neutral_emoji ", s)
+                return s
+            except Exception:
+                return x
+
+        def tok_stop_lemma(x):
+            toks = word_tokenize(str(x))
+            toks = [t for t in toks if t not in stop_words and len(t) > 2]
+            toks = [lemm.lemmatize(t) for t in toks]
+            return " ".join(toks)
+
+        def text_feats(txt):
+            s = str(txt)
+            words = s.split()
+            wc = len(words)
+            return {
+                "word_count": wc,
+                "char_count": len(s),
+                "sentence_count": max(1, len(re.split(r"[.!?]+", s))),
+                "avg_word_length": (sum(len(w) for w in words) / wc) if wc else 0.0,
+                "exclamation_count": s.count("!"),
+                "question_count": s.count("?"),
+                "capital_ratio": (sum(c.isupper() for c in s) / len(s)) if len(s) else 0.0,
+            }
+
+        df = df_in.copy()
+        if "ReviewText" not in df or "ReviewRating" not in df:
+            raise ValueError("`ReviewText` and `ReviewRating` required.")
+
+        # Textverarbeitung
+        t = df["ReviewText"].astype(str).apply(clean_text_basic)
+        t = t.apply(remove_special_chars)
+        t = t.apply(emoji_to_sentiment)
+        df["processed_text"] = t.apply(tok_stop_lemma)
+
+        # Numerische Textfeatures
+        feats = df["ReviewText"].apply(text_feats).apply(pd.Series)
+        df = pd.concat([df, feats], axis=1)
+
+        # VADER (optional)
+        if do_vader_:
+            try:
+                from nltk.sentiment import SentimentIntensityAnalyzer
+                sia = SentimentIntensityAnalyzer()
+                pol = df["ReviewText"].astype(str).apply(sia.polarity_scores)
+                df["sentiment_compound"] = pol.apply(lambda d: d["compound"])
+                df["sentiment_pos"] = pol.apply(lambda d: d["pos"])
+                df["sentiment_neu"] = pol.apply(lambda d: d["neu"])
+                df["sentiment_neg"] = pol.apply(lambda d: d["neg"])
+            except Exception:
+                for c in ["sentiment_compound", "sentiment_pos", "sentiment_neu", "sentiment_neg"]:
+                    df[c] = 0.0
+
+        return df
+
+    # ggf. Sampling für schnellere Iteration
+    df_in = df_raw.sample(n=min(sample_n, len(df_raw)), random_state=42).copy() if sample_n else df_raw
+
+    with st.spinner("Preprocessing…"):
+        df_proc = _preprocess_df(df_in, do_emoji, do_vader)
+
+    st.success(f"Preprocessed rows: {len(df_proc):,}")
+    dataset_preview(df_proc, "Preview of preprocessed data")
+
+    # kleine QC-KPIs
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Avg processed length", int(df_proc["processed_text"].str.len().mean()))
+    if "sentiment_compound" in df_proc:
+        c2.metric("Mean compound", f"{df_proc['sentiment_compound'].mean():.3f}")
+    c3.metric("Empty processed", int((df_proc["processed_text"].str.len() == 0).sum()))
+
+    # Speichern
     if st.button("💾 Save as processed CSV", use_container_width=True):
         os.makedirs(os.path.dirname(PATH_DATA_PROCESSED), exist_ok=True)
-        df.to_csv(PATH_DATA_PROCESSED, index=False)
+        df_proc.to_csv(PATH_DATA_PROCESSED, index=False)
+        st.session_state["processed_df"] = df_proc
         st.success(f"Saved → {PATH_DATA_PROCESSED}")
 
 def show_feature_engineering_page():
@@ -1668,54 +1793,190 @@ def show_live_prediction_DL_page():
                 st.json(getattr(inputs, "shape", None))
 
 def show_data_exploration_page():
+    import pandas as pd, numpy as np
+    import matplotlib.pyplot as plt, seaborn as sns
+    from pathlib import Path
+
     st.header("Data Exploration")
 
-    # Load sample data (in a real app, you'd load your actual data)
-    st.subheader("Dataset Overview")
-    st.write("""
-    The dataset contains customer reviews with ratings from 1 to 5 stars.
-    Below is a sample of the data distribution and features.
-    """)
+    # ---------- Daten laden (Upload + Fallback + Cache) ----------
+    @st.cache_data(show_spinner=False)
+    def _load_csv(path: str):
+        return pd.read_csv(path)
 
-    # Show target distribution
-    st.subheader("Rating Distribution")
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    def _first_existing(relpaths):
+        roots = [Path.cwd(), Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent]
+        for root in roots:
+            for rel in relpaths:
+                p = (root / rel).resolve()
+                if p.exists():
+                    return p.as_posix()
+        return None
 
-    # Mock data - replace with your actual data
-    rating_counts = pd.Series({
-        1: 7082,
-        2: 850,
-        3: 644,
-        4: 1099,
-        5: 3919
-    })
-
-    rating_counts.sort_index().plot(kind='bar', ax=ax[0])
-    ax[0].set_title('Review Count by Rating')
-    ax[0].set_xlabel('Rating')
-    ax[0].set_ylabel('Count')
-
-    rating_counts.sort_index().plot(kind='pie', autopct='%1.1f%%', ax=ax[1])
-    ax[1].set_title('Rating Distribution (%)')
-    ax[1].set_ylabel('')
-
-    st.pyplot(fig)
-
-    # Show feature distributions
-    st.subheader("Feature Distributions")
-    feature = st.selectbox("Select a feature to visualize",
-                           artifacts['metadata']['feature_columns'])
-
-    # Mock feature distribution - replace with your actual data
-    if "length" in feature or "count" in feature:
-        dist_data = np.random.poisson(10, 1000)
+    up = st.file_uploader("Upload CSV (optional)", type=["csv"])
+    if up:
+        df = pd.read_csv(up)
+        source = "uploaded file"
     else:
-        dist_data = np.random.normal(0, 1, 1000)
+        fallback = _first_existing([
+            "data/temu_reviews.csv",
+            "src/data/temu_reviews.csv",
+            "src/data/processed/temu_reviews_preprocessed.csv",
+            "data/processed/temu_reviews_preprocessed.csv",
+        ])
+        if not fallback:
+            st.error("No dataset found. Upload a CSV or place it under data/ or src/data/.")
+            return
+        df = _load_csv(fallback)
+        source = fallback
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    sns.histplot(dist_data, bins=30, kde=True, ax=ax)
-    ax.set_title(f"Distribution of {feature}")
-    st.pyplot(fig)
+    st.caption(f"Loaded: {source}")
+    if df.empty:
+        st.warning("Dataset is empty."); return
+
+    # ---------- Grundinfos ----------
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rows", f"{len(df):,}")
+    c2.metric("Users", f"{df['UserId'].nunique():,}" if 'UserId' in df else "–")
+    c3.metric("Countries", f"{df['UserCountry'].nunique():,}" if 'UserCountry' in df else "–")
+    c4.metric("Features", f"{len(df.columns)}")
+
+    st.dataframe(df.head(10), use_container_width=True)
+
+    # ---------- Filter ----------
+    with st.expander("Filters", expanded=True):
+        stars = sorted(df['ReviewRating'].dropna().unique()) if 'ReviewRating' in df else []
+        star_sel = st.multiselect("Star ratings", stars, default=stars)
+        top_countries = (df['UserCountry'].value_counts().head(25).index.tolist()
+                         if 'UserCountry' in df else [])
+        country_sel = st.multiselect("Countries (top 25 shown)", top_countries, default=top_countries)
+
+        # Datumsfilter
+        from datetime import timedelta
+
+        if 'ReviewDate' in df:
+            # Timestamps als UTC; NaT raus
+            d = pd.to_datetime(df['ReviewDate'], errors="coerce", utc=True)
+            d_valid = d.dropna()
+            if not d_valid.empty:
+                # -> Python datetime (tz-aware) für den Slider
+                dmin_py = d_valid.min().to_pydatetime()
+                dmax_py = d_valid.max().to_pydatetime()
+                r = st.slider(
+                    "Date range",
+                    min_value=dmin_py,
+                    max_value=dmax_py,
+                    value=(dmin_py, dmax_py),
+                    step=timedelta(days=1),
+                    format="YYYY-MM-DD",
+                )
+            else:
+                r = None
+        else:
+            r = None
+
+    # Filter anwenden
+    dfv = df.copy()
+    if 'ReviewRating' in dfv and star_sel:
+        dfv = dfv[dfv['ReviewRating'].isin(star_sel)]
+    if 'UserCountry' in dfv and country_sel:
+        dfv = dfv[dfv['UserCountry'].isin(country_sel)]
+    if r and 'ReviewDate' in dfv:
+        d = pd.to_datetime(dfv['ReviewDate'], errors="coerce", utc=True)
+        start, end = r  # Python datetime (mit tzinfo=UTC)
+        # in pandas Timestamps (tz-aware) umwandeln
+        start_ts = pd.Timestamp(start)
+        end_ts   = pd.Timestamp(end)
+        dfv = dfv[(d >= start_ts) & (d <= end_ts)]
+
+    st.caption(f"Filtered rows: {len(dfv):,}")
+
+    # ---------- Tabs ----------
+    tab1, tab2, tab3, tab4 = st.tabs(["Target distribution", "Lengths", "Geography & Time", "Quality"])
+
+    # === Tab 1: Ratings ===
+    with tab1:
+        if 'ReviewRating' not in dfv:
+            st.info("Column `ReviewRating` missing."); 
+        else:
+            counts = dfv['ReviewRating'].value_counts().sort_index()
+            # Bar
+            fig, ax = plt.subplots(figsize=(6,4))
+            ax.bar(counts.index, counts.values, edgecolor="black")
+            ax.set_xlabel("Star"); ax.set_ylabel("Count"); ax.set_title("Distribution of Review Ratings")
+            ax.set_xticks(range(int(counts.index.min()), int(counts.index.max())+1))
+            st.pyplot(fig); plt.close(fig)
+
+            # Pie
+            fig2, ax2 = plt.subplots(figsize=(5,4))
+            ax2.pie(counts.values, labels=counts.index, autopct="%1.1f%%", startangle=90)
+            ax2.set_title("Rating Distribution (%)")
+            st.pyplot(fig2); plt.close(fig2)
+
+    # === Tab 2: Lengths ===
+    with tab2:
+        if 'ReviewText' in dfv:
+            dfv['review_length'] = dfv['ReviewText'].astype(str).str.len()
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write(dfv['review_length'].describe())
+            with c2:
+                if 'ReviewRating' in dfv:
+                    fig, ax = plt.subplots(figsize=(6,4))
+                    sns.boxplot(data=dfv, x='ReviewRating', y='review_length', ax=ax)
+                    ax.set_title("Review Length vs Rating"); ax.set_xlabel("Star"); ax.set_ylabel("Length (chars)")
+                    st.pyplot(fig); plt.close(fig)
+            # Histogram
+            fig3, ax3 = plt.subplots(figsize=(6,4))
+            ax3.hist(dfv['review_length'], bins=40)
+            ax3.set_title("Histogram of review lengths"); ax3.set_xlabel("Length"); ax3.set_ylabel("Count")
+            st.pyplot(fig3); plt.close(fig3)
+        else:
+            st.info("Column `ReviewText` missing.")
+
+    # === Tab 3: Geo & Time ===
+    with tab3:
+        if 'UserCountry' in dfv:
+            top = dfv['UserCountry'].value_counts().head(15)
+            fig, ax = plt.subplots(figsize=(7,4))
+            ax.bar(top.index, top.values)
+            ax.set_title("Top countries by number of reviews"); ax.set_xlabel("Country"); ax.set_ylabel("Count")
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+            st.pyplot(fig); plt.close(fig)
+
+        if 'ReviewDate' in dfv and 'ReviewRating' in dfv:
+            d = pd.to_datetime(dfv['ReviewDate'], errors="coerce", utc=True)
+            # Zeitzone Berlin korrekt: tz_aware → convert, dann naive für Gruppierung
+            d_ber = d.dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
+            dfv2 = dfv.copy(); dfv2['ReviewDate'] = d_ber
+            dfv2['month'] = dfv2['ReviewDate'].dt.to_period('M').astype(str)
+            monthly = dfv2.groupby('month')['ReviewRating'].mean()
+            fig, ax = plt.subplots(figsize=(7,4))
+            ax.plot(monthly.index, monthly.values, marker='o'); ax.set_title("Average rating by month")
+            ax.set_xlabel("Month"); ax.set_ylabel("Avg rating"); plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+            ax.grid(True, alpha=.3); st.pyplot(fig); plt.close(fig)
+
+            # Heatmap Day x Hour
+            dfv2['day'] = dfv2['ReviewDate'].dt.day_name()
+            dfv2['hour'] = dfv2['ReviewDate'].dt.hour
+            order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+            heat = dfv2.pivot_table(index='day', columns='hour', values='ReviewRating', aggfunc='mean').reindex(order)
+            fig, ax = plt.subplots(figsize=(7,4))
+            sns.heatmap(heat, cmap='RdYlBu_r', center=3, ax=ax)
+            ax.set_title("Rating heatmap by day & hour"); st.pyplot(fig); plt.close(fig)
+
+    # === Tab 4: Quality ===
+    with tab4:
+        issues = []
+        if 'UserId' in dfv and 'ReviewText' in dfv:
+            duplicates = dfv.duplicated(subset=['UserId','ReviewText']).sum()
+            issues.append(("Duplicate reviews", duplicates))
+        missing_text = dfv['ReviewText'].isna().sum() if 'ReviewText' in dfv else 0
+        issues.append(("Missing review text", missing_text))
+        invalid = dfv[~dfv.get('ReviewRating', pd.Series(dtype=int)).isin([1,2,3,4,5])].shape[0] if 'ReviewRating' in dfv else 0
+        issues.append(("Invalid ratings (not 1-5)", invalid))
+
+        st.table(pd.DataFrame(issues, columns=["Check","Count"]))
 
 
 def show_results():
@@ -1990,8 +2251,9 @@ def main():
     HANDLERS = {
         "about":      show_about_page,
         "intro":      show_intro_page,
-        "load":       show_load_and_preprocess_page,
+        "load":       show_load_page,
         "dataexp":    show_data_exploration_page,
+        "preprocess": show_preprocess_page,
         "features":   show_feature_engineering_page,
         "compare":    show_compare_models,
         "eval100":    show_100_sample_evaluation_page,
