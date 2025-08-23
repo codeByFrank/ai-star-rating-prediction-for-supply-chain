@@ -2202,40 +2202,71 @@ def show_results():
 def show_intro_page():
     section_header("Customer Satisfaction from Reviews (Temu)", "📦")
 
-    # --- kleines, zentriertes Bild (ohne extra CSS/Wrapper) ---
+    # small centered image (optional)
     import os
     img_path = "satisfied-customer.png"
     if os.path.exists(img_path):
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
-            st.image(img_path, width=320)
+            st.image(img_path, width=360)
 
-    # --- Text ---
     st.markdown("""
-                
-**Introduction**
-               In today’s digital marketplace, customer reviews are more than opinions—they are a critical source of insight for businesses. Manually reading thousands of reviews is slow and inconsistent, making it hard to detect recurring issues like delays, poor packaging, or product quality.
+### Introduction
+In today’s digital marketplace, customer reviews are more than opinions—they are a critical source of insight for businesses.  
+Reading thousands of free-text reviews manually is slow and inconsistent, which makes it hard to spot recurring issues such as delivery delays, poor packaging, or product quality problems.
 
-Our project addresses this challenge by developing a machine learning app that predicts star ratings (1–5) from free-text reviews. Using a dataset of ~14,000 English-language Temu reviews from Trustpilot, we built and compared classical and deep learning models. The system not only assigns a star rating but also groups reviews into positive, neutral, or negative categories for quick triage.
- 
-The result is a tool that transforms raw feedback into actionable insights, helping supply-chain teams monitor issues in real time, respond faster, and ultimately improve customer satisfaction.
+Our project addresses this by building a machine-learning app that predicts **1–5 star ratings** from review text. Using ~**14k** English-language Temu reviews (from Trustpilot), we compared **classical ML** and **deep-learning** models. The system not only predicts a star rating, it also groups reviews into **positive / neutral / negative** for faster triage.
 
-**Dataset & scope**  
-We initially scraped AliExpress (~57k) and Wish (~99k), but training at that scale was impractical for local resources. On our mentor’s advice that ~10k observations are sufficient, we pivoted to **Temu** and collected ~14k English-language Trustpilot reviews. Temu’s ratings are strongly polarized (many 1★ and 5★), which is ideal for testing class-imbalance strategies.
+The result is a tool that turns raw feedback into **actionable monitoring** for supply-chain and logistics teams—helping them respond faster and improve customer satisfaction.
+""")
 
-**Objectives**
+    st.markdown("""
+### Web scraping – data collection
+We built a robust, polite scraper to collect high-quality Trustpilot reviews for **Temu**, **AliExpress**, and **Wish**.
+
+**What we collect (per review)**
+- User (anonymized) and **country**
+- **Star rating**, review **title** and **text**
+- **Timestamps** and **company replies**
+
+**Tech stack**
+- `requests` – reliable HTTP requests  
+- `beautifulsoup4` – fast HTML parsing  
+- `pandas` – structured CSV output
+
+**Reliability & quality controls**
+- **Dynamic targeting**: switch between `temu`, `aliexpress`, `wish`
+- **Text cleaning & date normalization** (e.g. “2 days ago” → ISO date)
+- **Polite rate limiting** (configurable delays / max pages)
+- **Comprehensive logging** for progress & errors
+
+Output is a clean, analysis-ready CSV (e.g. `temu_reviews.csv`) used throughout this app.
+""")
+
+    st.markdown("""
+### Dataset & scope
+We first scraped AliExpress (~57k) and Wish (~99k), but training at that scale was impractical on local hardware.  
+On our mentor’s advice that ~10k observations are sufficient, we pivoted to **Temu** (~14k). Temu’s ratings are strongly **polarized** (many **1★** and **5★**), which is ideal for testing **class-imbalance** strategies.
+""")
+
+    st.markdown("""
+### Objectives
 1. Scrape, clean, and explore the Temu review corpus.  
 2. Predict **1–5 star ratings from free text** (multi-class classification).  
 3. Compare baseline ML vs. deep models under class imbalance.  
-4. Ship a **live demo** that instantly returns a rating and sentiment group for new text.
+4. Ship a **live demo** that returns a rating and sentiment group for any new text.
+""")
 
-**Design decisions**
-- Moved from **regression to classification** to align directly with star labels and business usage.  
-- Explored automated reply templates driven by predicted sentiment (interesting, but out of scope for this app).  
-- Favor transparent features (TF-IDF + light text signals) with a champion model and robust fallbacks.
+    st.markdown("""
+### Design decisions
+- Moved from **regression to classification** to align with star labels and business usage.  
+- Explored automated **reply templates** driven by predicted sentiment (interesting, but out of scope for this app).  
+- Favored **transparent features** (TF-IDF + light text signals) with a champion model and robust fallbacks.
+""")
 
-**Why it matters for supply chain**  
-The pipeline highlights clusters of issues (e.g., *late delivery*, *poor packaging*, *not as described*) and turns raw feedback into actionable monitoring for quality and logistics—helping teams respond faster and prioritize fixes that lift satisfaction.
+    st.markdown("""
+### Why it matters for supply chain
+The pipeline highlights issue clusters (e.g., *late delivery*, *poor packaging*, *not as described*) and turns raw feedback into **real-time monitoring** for quality and logistics—helping teams prioritize fixes that raise satisfaction.
 """)
 
     c1, c2, c3 = st.columns(3)
