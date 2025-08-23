@@ -50,6 +50,35 @@ def _bases_for(name: str):
         yield (root / "api_models" / name).resolve()
         yield (root / "src" / "api_models" / name).resolve()
 
+
+def _ensure_nltk():
+    import nltk
+    def _has(path: str) -> bool:
+        try:
+            nltk.data.find(path)
+            return True
+        except LookupError:
+            return False
+
+    # Tokenizer: neue NLTK-Version sucht oft 'punkt_tab', sonst 'punkt'
+    if not (_has("tokenizers/punkt_tab") or _has("tokenizers/punkt")):
+        for pkg, path in [("punkt_tab", "tokenizers/punkt_tab"), ("punkt", "tokenizers/punkt")]:
+            try:
+                nltk.download(pkg, quiet=True)
+                if _has(path):
+                    break
+            except Exception:
+                pass
+
+    # Weitere Ressourcen (still & robust)
+    if not _has("corpora/stopwords"):
+        nltk.download("stopwords", quiet=True)
+    if not _has("corpora/wordnet"):
+        nltk.download("wordnet", quiet=True)
+    if not _has("sentiment/vader_lexicon"):
+        nltk.download("vader_lexicon", quiet=True)
+
+
 def find_dl_model_path(name: str):
     """Suche .keras/.h5/.hdf5 oder SavedModel-Ordner unter allen Roots."""
     patterns = ["model.keras", "*.keras", "*.h5", "*.hdf5", "saved_model", "*saved_model*"]
@@ -608,6 +637,9 @@ def show_preprocess_page():
     with c3:
         sample_n = st.number_input("Sample (0 = all)", min_value=0, value=0, step=1000)
 
+    with st.spinner("Setting up NLTK resources…"):
+            _ensure_nltk()
+
     # Pipeline (gecached)
     @st.cache_data(show_spinner=False)
     def _preprocess_df(df_in, do_emoji_, do_vader_):
@@ -668,7 +700,8 @@ def show_preprocess_page():
 
         # Numerische Textfeatures
         feats = df["ReviewText"].apply(text_feats).apply(pd.Series)
-        df = pd.concat([df, feats], axis=1)
+        for c in feats.columns:
+            df[c] = feats[c] 
 
         # VADER (optional)
         if do_vader_:
@@ -683,7 +716,7 @@ def show_preprocess_page():
             except Exception:
                 for c in ["sentiment_compound", "sentiment_pos", "sentiment_neu", "sentiment_neg"]:
                     df[c] = 0.0
-
+        df = df.loc[:, ~df.columns.duplicated()]
         return df
 
     # ggf. Sampling für schnellere Iteration
@@ -691,6 +724,7 @@ def show_preprocess_page():
 
     with st.spinner("Preprocessing…"):
         df_proc = _preprocess_df(df_in, do_emoji, do_vader)
+        df_proc = df_proc.loc[:, ~df_proc.columns.duplicated()]
 
     st.success(f"Preprocessed rows: {len(df_proc):,}")
     dataset_preview(df_proc, "Preview of preprocessed data")
