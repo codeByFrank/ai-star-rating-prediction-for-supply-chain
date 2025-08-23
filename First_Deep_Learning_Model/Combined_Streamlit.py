@@ -2371,6 +2371,17 @@ def show_conclusion_page():
     *   **Data Hunger:** DL requires vast amounts of data to excel, whereas ML can deliver strong results with smaller, well-structured datasets.
     *   **Business Reality:** The "best" model is a trade-off. Performance gains must be weighed against explainability, operational costs, and maintenance complexity.
     """)
+
+    st.markdown("---")
+    with st.expander("Acknowledgements"):
+        st.markdown("""
+        **Acknowledgements**
+
+        We would like to express our gratitude to:
+
+        *   **DataScientest** for providing the platform and knowledge for this project.
+        *   **Mr. Kylian**, our tutor, for his expert advice, insightful feedback, and constant availability which were crucial to our success.
+        """)
     #import plotly.express as px
     #comparison_data = {
     #    'Model': ['LinearSVC (ML)', 'Random Forest (ML)', 'DistilBERT (DL)', 'LSTM (DL)'],
