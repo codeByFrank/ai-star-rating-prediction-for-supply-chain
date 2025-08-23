@@ -2045,9 +2045,14 @@ def show_results():
 
     section_header("Model Evaluation Results")
 
-    # ---- Neu: über ROOT_CANDIDATES suchen (CWD, Dateiverz., Parent, ...) ----
+    # --- robustes Root-Finder
     def _first_across_roots(relpaths):
-        for root in ROOT_CANDIDATES:              # kommt aus deinem File (wird auch an anderer Stelle benutzt)
+        roots = []
+        if "ROOT_CANDIDATES" in globals():
+            roots += list(ROOT_CANDIDATES)
+        here = Path(__file__).resolve().parent
+        roots += [Path.cwd(), here, here.parent]
+        for root in roots:
             for rel in relpaths:
                 p = (Path(root) / rel).resolve()
                 if p.exists():
@@ -2055,7 +2060,7 @@ def show_results():
         return None
 
     # =======================
-    # 1) Classical DL RESULTS
+    # 1) "Classical DL" RESULTS (dein gespeichertes model_results.pkl)
     # =======================
     try:
         pkl_path = _first_across_roots([
@@ -2069,21 +2074,48 @@ def show_results():
             with open(pkl_path, "rb") as f:
                 all_results = pickle.load(f)
 
-            npz_path = _first_across_roots([
-                "data/preprocessed_data.npz",
-                "results/preprocessed_data.npz",
-                "models/preprocessed_data.npz",
-                "src/models/preprocessed_data.npz",
-            ])
-            if npz_path:
-                data = np.load(npz_path)
-                y_test = data["y_test"]; has_roc_data = True
-            else:
-                y_test = None; has_roc_data = False
+            # --- y_test robust laden (NPZ oder Fallback aus all_results)
+            def _load_y_test(all_results):
+                npz_path = _first_across_roots([
+                    "data/preprocessed_data.npz",
+                    "results/preprocessed_data.npz",
+                    "models/preprocessed_data.npz",
+                    "src/data/preprocessed_data.npz",
+                    "src/models/preprocessed_data.npz",
+                ])
+                if npz_path:
+                    try:
+                        with np.load(npz_path, allow_pickle=True) as z:
+                            for k in ("y_test", "y_true", "labels", "y"):
+                                if k in z:
+                                    y = np.asarray(z[k]).astype(int).ravel()
+                                    if y.size:
+                                        return y
+                    except Exception as e:
+                        st.info(f"Could not read NPZ at {npz_path}: {e}")
+
+                if isinstance(all_results, (list, tuple)):
+                    for r in all_results:
+                        if not isinstance(r, dict):
+                            continue
+                        for k in ("y_test", "y_true", "labels", "y"):
+                            if k in r:
+                                try:
+                                    y = np.asarray(r[k]).astype(int).ravel()
+                                    if y.size:
+                                        return y
+                                except Exception:
+                                    pass
+                return None
+
+            y_test = _load_y_test(all_results)
+            has_roc_data = y_test is not None
 
             class_names = ["1","2","3","4","5"]
 
             st.subheader("Performance Summary")
+
+            # --- Tabelle robust bauen
             summary_data = [{
                 "Model": r.get("model_name"),
                 "Accuracy": r.get("accuracy"),
@@ -2091,25 +2123,38 @@ def show_results():
                 "F1-Macro": r.get("f1_macro"),
                 "AUC Score": r.get("auc_score"),
             } for r in all_results]
-            summary_df = pd.DataFrame(summary_data).sort_values(
-                by=("F1-Weighted" if "F1-Weighted" in pd.DataFrame(summary_data).columns else "Accuracy"),
-                ascending=False
-            )
-            st.dataframe(summary_df.style.format({
-                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
-            }), use_container_width=True)
+            summary_df = pd.DataFrame(summary_data)
 
+            metric_cols = ["Accuracy","F1-Weighted","F1-Macro","AUC Score"]
+            for c in metric_cols:
+                if c in summary_df.columns:
+                    summary_df[c] = pd.to_numeric(summary_df[c], errors="coerce")
+
+            sort_col = next((c for c in ["F1-Weighted","Accuracy","F1-Macro","AUC Score"]
+                             if c in summary_df.columns and summary_df[c].notna().any()), None)
+            if sort_col:
+                summary_df = summary_df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+            fmt = {c: (lambda v: "" if pd.isna(v) else f"{v:.3f}")
+                   for c in metric_cols if c in summary_df.columns}
+            st.dataframe(summary_df.style.format(fmt), use_container_width=True)
+
+            # --- Balkendiagramm
             st.subheader("Performance Metrics Comparison (DL)")
-            fig1, ax1 = plt.subplots(figsize=(12,6))
-            metrics = [c for c in ['Accuracy','F1-Weighted','F1-Macro','AUC Score'] if c in summary_df.columns]
-            x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
-            for i, metric in enumerate(metrics):
-                ax1.bar(x + i*width, summary_df[metric], width, label=metric, alpha=0.85)
-            ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison (DL)')
-            ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(summary_df['Model'], rotation=45, ha='right')
-            ax1.legend(); ax1.grid(True, alpha=0.3)
-            st.pyplot(fig1); plt.close(fig1)
+            metrics = [c for c in metric_cols if c in summary_df.columns and summary_df[c].notna().any()]
+            if metrics:
+                fig1, ax1 = plt.subplots(figsize=(12,6))
+                x = np.arange(len(summary_df)); width = 0.8/max(1,len(metrics))
+                plot_df = summary_df.copy()
+                plot_df[metrics] = plot_df[metrics].fillna(0.0)
+                for i, metric in enumerate(metrics):
+                    ax1.bar(x + i*width, plot_df[metric], width, label=metric, alpha=0.85)
+                ax1.set_xlabel('Models'); ax1.set_ylabel('Score'); ax1.set_title('Model Performance Comparison (DL)')
+                ax1.set_xticks(x + width*(len(metrics)-1)/2); ax1.set_xticklabels(plot_df['Model'], rotation=45, ha='right')
+                ax1.legend(); ax1.grid(True, alpha=0.3)
+                st.pyplot(fig1); plt.close(fig1)
 
+            # --- Confusion Matrices
             st.subheader("Confusion Matrices (DL)")
             n_models = len(all_results)
             fig2, axes = plt.subplots(1, n_models, figsize=(6*n_models,5))
@@ -2121,82 +2166,50 @@ def show_results():
                 ax.set_title(result['model_name']); ax.set_ylabel('Actual'); ax.set_xlabel('Predicted')
             st.pyplot(fig2); plt.close(fig2)
 
+            # --- ROC
             if has_roc_data:
                 try:
                     st.subheader("ROC Curves Comparison (DL)")
-                    fig3 = plt.figure(figsize=(10,8))
-                    y_true_bin = label_binarize(y_test, classes=np.arange(len(class_names)))
-                    models_with_proba = [r for r in all_results if 'y_pred_proba' in r]
+                    classes = sorted(np.unique(y_test).tolist())
+                    y_true_bin = label_binarize(y_test, classes=classes)
+                    models_with_proba = [r for r in all_results if isinstance(r, dict) and 'y_pred_proba' in r]
+
                     if models_with_proba:
+                        fig3 = plt.figure(figsize=(10, 8))
+                        drew_any = False
                         for r in models_with_proba:
-                            y_pred_proba = np.array(r['y_pred_proba'])
-                            fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
+                            proba = np.asarray(r['y_pred_proba'])
+                            if proba.ndim == 1:
+                                continue
+                            n = min(len(y_test), proba.shape[0])
+                            if n == 0:
+                                continue
+                            proba = proba[:n, :len(classes)]
+                            y_bin_n = y_true_bin[:n, :len(classes)]
+                            fpr, tpr, _ = roc_curve(y_bin_n.ravel(), proba.ravel())
                             roc_auc = auc(fpr, tpr)
-                            plt.plot(fpr, tpr, label=f"{r['model_name']} (AUC = {roc_auc:.2f})")
-                        plt.plot([0,1],[0,1],'k--'); plt.xlim([0,1]); plt.ylim([0,1.05])
-                        plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
-                        plt.title('Micro-average ROC Curve Comparison (DL)')
-                        plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
-                        st.pyplot(fig3); plt.close(fig3)
+                            plt.plot(fpr, tpr, label=f"{r.get('model_name','model')} (AUC = {roc_auc:.2f})")
+                            drew_any = True
+
+                        if drew_any:
+                            plt.plot([0, 1], [0, 1], 'k--')
+                            plt.xlim([0.0, 1.0]); plt.ylim([0.0, 1.05])
+                            plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+                            plt.title('Micro-average ROC Curve Comparison (DL)')
+                            plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
+                            st.pyplot(fig3); plt.close(fig3)
+                        else:
+                            st.warning("No usable probability arrays found for ROC curves (DL).")
                     else:
-                        st.warning("No models with prediction probabilities found for ROC curves (DL)")
+                        st.warning("No models with prediction probabilities found for ROC curves (DL).")
                 except Exception as e:
                     st.warning(f"Could not generate ROC curves (DL): {e}")
+            else:
+                st.warning("ROC curves not available – test labels (y_test) were not found.")
         else:
             st.info("No DL pickle found (model_results.pkl). Skipping DL details.")
     except Exception as e:
         st.error(f"Error loading DL results: {e}")
-
-    # =======================
-    # 2) DEEP LEARNING RESULTS
-    # =======================
-    try:
-        rows = []
-        for name in MODEL_NAMES:
-            meta_path = _first_across_roots([
-                f"api_models/{name}/metadata.json",
-                f"src/api_models/{name}/metadata.json",
-            ])
-            if not meta_path:
-                continue
-            with open(meta_path, "r", encoding="utf-8") as f:
-                m = json.load(f)
-            rows.append({
-                "Model": m.get("model_name", name),
-                "Accuracy": m.get("test_accuracy") or m.get("accuracy"),
-                "F1-Weighted": m.get("weighted_f1") or m.get("f1_weighted"),
-                "F1-Macro": m.get("macro_f1") or m.get("f1_macro"),
-                "AUC Score": m.get("auc_score") or m.get("auc"),
-            })
-
-        st.markdown("---")
-        st.subheader("Performance Summary (Deep Learning)")
-
-        if rows:
-            df_dl = pd.DataFrame(rows)
-            sort_col = "F1-Weighted" if "F1-Weighted" in df_dl.columns else ("Accuracy" if "Accuracy" in df_dl.columns else None)
-            if sort_col:
-                df_dl = df_dl.sort_values(sort_col, ascending=False).reset_index(drop=True)
-
-            st.dataframe(df_dl.style.format({
-                'Accuracy':'{:.3f}','F1-Weighted':'{:.3f}','F1-Macro':'{:.3f}','AUC Score':'{:.3f}'
-            }), use_container_width=True)
-
-            st.subheader("Performance Metrics Comparison (DL)")
-            metrics = [c for c in ['Accuracy','F1-Weighted','F1-Macro','AUC Score'] if c in df_dl.columns]
-            if metrics:
-                fig, ax = plt.subplots(figsize=(12,6))
-                x = np.arange(len(df_dl)); w = 0.8/max(1,len(metrics))
-                for i, m in enumerate(metrics):
-                    ax.bar(x + i*w, df_dl[m], w, label=m, alpha=0.85)
-                ax.set_xlabel('Models'); ax.set_ylabel('Score'); ax.set_title('DL Model Performance Comparison')
-                ax.set_xticks(x + w*(len(metrics)-1)/2); ax.set_xticklabels(df_dl['Model'], rotation=45, ha='right')
-                ax.legend(); ax.grid(True, alpha=0.3)
-                st.pyplot(fig); plt.close(fig)
-        else:
-            st.info("No Deep Learning metadata found under api_models/*/metadata.json.")
-    except Exception as e:
-        st.error(f"Error loading Deep Learning results: {e}")
 
 def get_intro_image():
     # Ordner der aktuellen Datei (Combined_Streamlit.py)
