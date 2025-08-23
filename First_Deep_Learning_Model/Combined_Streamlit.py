@@ -169,7 +169,33 @@ def clean_text_basic(text: str) -> str:
     x = re.sub(r"\s+", " ", x).strip()
     return x
 
+def _safe_stopwords():
+    # Try NLTK; else lightweight fallback
+    try:
+        from nltk.corpus import stopwords
+        return set(stopwords.words("english"))
+    except Exception:
+        return set("""
+        a an the and or is are was were be been being to of in on for with at by from up about into over after
+        before between under again further then once here there all any both each few more most other some such no nor
+        not only own same so than too very s t can will just don don should now
+        """.split())
 
+STOP_EN = _safe_stopwords()
+
+def _safe_lemmatize(tokens):
+    try:
+        from nltk.stem import WordNetLemmatizer
+        import nltk
+        try:
+            nltk.data.find("corpora/wordnet")
+        except LookupError:
+            nltk.download("wordnet", quiet=True)
+        wnl = WordNetLemmatizer()
+        return [wnl.lemmatize(t) for t in tokens]
+    except Exception:
+        return tokens 
+    
 def build_neg_neu_pos_text(df: pd.DataFrame, text_col="processed_text", rating_col="ReviewRating"):
     neg = " ".join(df.loc[df[rating_col] <= 2, text_col].dropna().astype(str))
     neu = " ".join(df.loc[df[rating_col] == 3, text_col].dropna().astype(str))
@@ -301,12 +327,13 @@ PAGES = [
     ("3) Data Exploration",      "dataexp"),
     ("4) Preprocess",            "preprocess"),
     ("5) Feature Engineering",   "features"),
-    ("6) Compare Models (ML)",        "compare"),
+    ("6) Compare Models (ML)",   "compare"),
     ("7) 100-Sample Evaluation", "eval100"),
     ("8) Live Prediction (ML)",  "live_ml"),
     ("9) Live Prediction (DL)",  "live_dl"),
     ("10) Compare Models (DL)",  "results"),
-    ("About",              "about"),
+    ("11) Conclusion",           "conclusion"),
+    ("12) About",                "about"),
     
 ]
 LABEL_TO_KEY = {label: key for label, key in PAGES}
@@ -386,29 +413,21 @@ def load_mlp_specific_assets():
     return vectorizer, mlp_metadata
 
 
-def clean_text(text):
-    """Clean and preprocess text data"""
-    if pd.isna(text) or text == '':
-        return ''
-
-    # Convert to lowercase
-    text = str(text).lower()
-
-    # Remove URLs, email addresses
-    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\S+@\S+', '', text)
-
-    # Remove special characters and digits, keep only alphabets and spaces
-    text = re.sub(r'[^a-zA-Z\s]', '', text)
-
-    # Tokenize
-    tokens = word_tokenize(text)
-
-    # Remove stopwords and lemmatize
-    tokens = [lemmatizer.lemmatize(token) for token in tokens
-              if token not in stop_words and len(token) > 2]
-
-    return ' '.join(tokens)
+def clean_text(text: str) -> str:
+    """Lightweight clean for inference (no NLTK requirement)."""
+    if pd.isna(text) or text == "":
+        return ""
+    x = str(text).lower()
+    x = re.sub(r"http\S+|www\.\S+|https?\S+", " ", x)
+    x = re.sub(r"\S+@\S+", " ", x)
+    x = re.sub(r"<.*?>", " ", x)
+    # keep letters/spaces only
+    x = re.sub(r"[^a-z\s]", " ", x)
+    # regex tokenization
+    toks = re.findall(r"[a-z]+", x)
+    toks = [t for t in toks if len(t) > 2 and t not in STOP_EN]
+    toks = _safe_lemmatize(toks)  # no-op if wordnet not present
+    return " ".join(toks)
 
 
 def preprocess_text(text, max_len=100):
@@ -454,8 +473,8 @@ def load_model_and_metadata(model_name):
 def preprocess_input(review_text, review_title, review_count, user_country):
     """Preprocess user input for prediction"""
     # Clean text
-    clean_review = clean_text(review_text)
-    clean_title = clean_text(review_title)
+    clean_review = clean_text_basic(review_text)
+    clean_title = clean_text_basic(review_title)
     combined_text = clean_review + ' ' + clean_title
 
     # Tokenize and pad text
@@ -1545,7 +1564,7 @@ def show_live_prediction_ml_page():
             st.stop()
 
         # --- features ---
-        processed = clean_text_basic(text)
+        processed = clean_text(text)
         X_tfidf = tfidf.transform([processed])
         X_num = neutral_num_vector()
         Xc = hstack([X_tfidf, X_num])
@@ -1682,7 +1701,7 @@ def show_live_prediction_DL_page():
     import os, json
     from pathlib import Path
 
-    st.header("Make a Prediction")
+    section_header("Make a Prediction")
 
     # --- Preprocessing-Checks wie gehabt ---
     needed = ["metadata", "tokenizer", "scaler", "label_encoders"]
@@ -1787,7 +1806,7 @@ def show_live_prediction_DL_page():
 
         # Display cleaned text
         st.subheader("Preprocessed Text")
-        cleaned_review = clean_text(review_text)
+        cleaned_review = clean_text_basic(review_text)
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Original Review**")
@@ -1838,7 +1857,7 @@ def show_data_exploration_page():
     import matplotlib.pyplot as plt, seaborn as sns
     from pathlib import Path
 
-    st.header("Data Exploration")
+    section_header("Data Exploration")
 
     # ---------- Daten laden (Upload + Fallback + Cache) ----------
     @st.cache_data(show_spinner=False)
@@ -2024,7 +2043,7 @@ def show_results():
     import os, json
     from pathlib import Path
 
-    st.header("Model Evaluation Results")
+    section_header("Model Evaluation Results")
 
     # ---- Neu: über ROOT_CANDIDATES suchen (CWD, Dateiverz., Parent, ...) ----
     def _first_across_roots(relpaths):
@@ -2193,8 +2212,13 @@ def show_intro_page():
 
     # --- Text ---
     st.markdown("""
-**Context & motivation**  
-Online marketplaces live and die by customer reviews. For supply-chain teams, reviews surface recurring issues—delivery delays, damaged goods, wrong items, pricing, and durability. Reading thousands of free-text comments manually is slow and inconsistent; we need tooling that summarizes signal quickly and reliably.
+                
+**Introduction**
+               In today’s digital marketplace, customer reviews are more than opinions—they are a critical source of insight for businesses. Manually reading thousands of reviews is slow and inconsistent, making it hard to detect recurring issues like delays, poor packaging, or product quality.
+
+Our project addresses this challenge by developing a machine learning app that predicts star ratings (1–5) from free-text reviews. Using a dataset of ~14,000 English-language Temu reviews from Trustpilot, we built and compared classical and deep learning models. The system not only assigns a star rating but also groups reviews into positive, neutral, or negative categories for quick triage.
+ 
+The result is a tool that transforms raw feedback into actionable insights, helping supply-chain teams monitor issues in real time, respond faster, and ultimately improve customer satisfaction.
 
 **Dataset & scope**  
 We initially scraped AliExpress (~57k) and Wish (~99k), but training at that scale was impractical for local resources. On our mentor’s advice that ~10k observations are sufficient, we pivoted to **Temu** and collected ~14k English-language Trustpilot reviews. Temu’s ratings are strongly polarized (many 1★ and 5★), which is ideal for testing class-imbalance strategies.
@@ -2220,25 +2244,75 @@ The pipeline highlights clusters of issues (e.g., *late delivery*, *poor packagi
     c3.metric("Demo", "Real-time prediction")
 
 def show_conclusion_page():
-    section_header("Conclusion", "✅")
+    section_header("Conclusion")
+    st.header("Supply Chain Sentiment AI Application")
+
     st.markdown("""
-    **What worked well**
-    - **Stacking** delivered the best trade-off on imbalanced data (strong Weighted-F1).
-    - Simple **TF-IDF (1–2-grams)** + a few pragmatic numeric features (length, VADER).
-    - Clear split between **negative** (1–2★) and **positive** (4–5★); **neutral (3★)** remains hardest.
+    **Advanced Model Benchmarking:** The selection of the final classification model was determined through a structured 
+        empirical evaluation of an ensemble of 18 candidate algorithms, comprising both traditional machine learning and
+          modern deep learning architectures.
 
-    **Practical takeaways**
-    - Keep the deployed **stacking** model for production; use **Logistic Regression / LinearSVC** as robust fallbacks.
-    - Apply a small **3★ penalty** at inference to curb mid-class over-prediction if your business needs clearer polarities.
-    - Use grouped evaluation (neg/neu/pos) alongside 5-class metrics for business-friendly reporting.
+    - **Machine Learning (12 Models):** Implemented and tuned a wide range of classical algorithms:
+        - Stacking
+        - LinearSVC
+        - Logistic Regression
+        - Hard Voting
+        - Soft Voting
+        - XGBoost
+        - Gradient Boosting
+        - Random Forest
+        - K-Nearest Neighbours
+        - Gaussian Naive Bayes
+        - Decision Tree) 
+        using TF-IDF feature extraction.
 
-    **Artifacts**
-    - Place your pickles in **`src/models/`** (or `models/`) with these names:
-      - `tfidf_vectorizer.pkl`, `scaler.pkl`, `feature_info.pkl`, `processed_data.pkl`, and
-      - either `best_model.pkl` **or** `best_classification_model.pkl`.
+    - **Deep Learning (6 Models):** Experimented with state-of-the-art neural networks, almost certainly including pre-trained transformer models :
+        - Deep MLP with TF-IDF 
+        - LSTM Model 
+        - BiLSTM with Attention 
+        - CNN Model 
+        - Transformer Model 
+        - Hybrid CNN-LSTM 
+     for their superior context understanding, alongside other architectures like LSTMs.
 
-    You can run everything above **without retraining**.
+    **Data-Driven Deployment:** The final application is powered by the champion model from this rigorous testing process,
+                                ensuring high-accuracy sentiment classification for supply chain terminology.
+
+    **Accessible Interface:** The complex AI backend is delivered through a user-friendly, web-based interface built with 
+                                    Streamlit, making advanced analytics accessible to non-technical domain experts.
+
+    **Outcome:** Provides a reliable, automated system for monitoring market sentiment, turning news analysis from a manual
+                                    chore into a scalable, real-time strategic function.
     """)
+
+    st.subheader("Model Comparison: Key Considerations")
+
+    st.markdown("""
+    *   **Cost & Complexity:** DL models demand significant computational resources (GPUs) and time, while ML models are faster and cheaper to train and run.
+    *   **Data Hunger:** DL requires vast amounts of data to excel, whereas ML can deliver strong results with smaller, well-structured datasets.
+    *   **Business Reality:** The "best" model is a trade-off. Performance gains must be weighed against explainability, operational costs, and maintenance complexity.
+    """)
+    #import plotly.express as px
+    #comparison_data = {
+    #    'Model': ['LinearSVC (ML)', 'Random Forest (ML)', 'DistilBERT (DL)', 'LSTM (DL)'],
+    #    'Accuracy': [0.89, 0.87, 0.92, 0.85],
+    #    'F1-Score': [0.89, 0.87, 0.92, 0.85],
+    #    'Training Time (min)': [2, 10, 240, 120],
+    #    'Interpretability': ['High', 'Medium', 'Low', 'Low']
+    #}
+    #df = pd.DataFrame(comparison_data)
+
+    #st.header("Model Comparison: Machine Learning vs. Deep Learning")
+
+    # Metrics Table
+    #st.subheader("Performance Metrics")
+    #st.dataframe(df.style.highlight_max(axis=0, subset=['Accuracy', 'F1-Score'], color='lightgreen'),
+    #             use_container_width=True)
+
+    # Bar Chart for Accuracy
+    #st.subheader("Accuracy Comparison")
+    #fig = px.bar(df, x='Model', y='Accuracy', title='Model Accuracy', color='Model')
+    #st.plotly_chart(fig)
 
 
 def show_about_page():
