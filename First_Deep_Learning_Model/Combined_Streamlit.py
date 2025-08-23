@@ -2331,7 +2331,7 @@ def show_conclusion_page():
         empirical evaluation of an ensemble of 18 candidate algorithms, comprising both traditional machine learning and
           modern deep learning architectures.
 
-    - **Machine Learning (12 Models):** Implemented and tuned a wide range of classical algorithms:
+    - **Machine Learning (11 Models):** Implemented and tuned a wide range of classical algorithms:
         - Stacking
         - LinearSVC
         - Logistic Regression
