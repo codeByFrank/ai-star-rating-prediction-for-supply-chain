@@ -2375,8 +2375,6 @@ def show_conclusion_page():
     st.markdown("---")
     with st.expander("Acknowledgements"):
         st.markdown("""
-        **Acknowledgements**
-
         We would like to express our gratitude to:
 
         *   **DataScientest** for providing the platform and knowledge for this project.
