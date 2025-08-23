@@ -2167,45 +2167,60 @@ def show_results():
             st.pyplot(fig2); plt.close(fig2)
 
             # --- ROC
-            if has_roc_data:
-                try:
-                    st.subheader("ROC Curves Comparison (DL)")
-                    classes = sorted(np.unique(y_test).tolist())
-                    y_true_bin = label_binarize(y_test, classes=classes)
-                    models_with_proba = [r for r in all_results if isinstance(r, dict) and 'y_pred_proba' in r]
+            st.subheader("ROC Curves Comparison (DL)")
 
-                    if models_with_proba:
-                        fig3 = plt.figure(figsize=(10, 8))
-                        drew_any = False
-                        for r in models_with_proba:
-                            proba = np.asarray(r['y_pred_proba'])
-                            if proba.ndim == 1:
-                                continue
-                            n = min(len(y_test), proba.shape[0])
-                            if n == 0:
-                                continue
-                            proba = proba[:n, :len(classes)]
-                            y_bin_n = y_true_bin[:n, :len(classes)]
-                            fpr, tpr, _ = roc_curve(y_bin_n.ravel(), proba.ravel())
-                            roc_auc = auc(fpr, tpr)
-                            plt.plot(fpr, tpr, label=f"{r.get('model_name','model')} (AUC = {roc_auc:.2f})")
-                            drew_any = True
-
-                        if drew_any:
-                            plt.plot([0, 1], [0, 1], 'k--')
-                            plt.xlim([0.0, 1.0]); plt.ylim([0.0, 1.05])
-                            plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
-                            plt.title('Micro-average ROC Curve Comparison (DL)')
-                            plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
-                            st.pyplot(fig3); plt.close(fig3)
-                        else:
-                            st.warning("No usable probability arrays found for ROC curves (DL).")
-                    else:
-                        st.warning("No models with prediction probabilities found for ROC curves (DL).")
-                except Exception as e:
-                    st.warning(f"Could not generate ROC curves (DL): {e}")
+            # 1) Versuch: PNG finden/anzeigen
+            roc_img = _first_across_roots([
+                "charts/micro-average_roc_curve_comparison.png",
+                "api_models/charts/micro-average_roc_curve_comparison.png",
+                "results/micro-average_roc_curve_comparison.png",
+                "charts/micro-average-roc-curve-comparison.png",
+                "api_models/charts/micro-average-roc-curve-comparison.png",
+                "results/micro-average-roc-curve-comparison.png",
+            ])
+            if roc_img:
+                st.image(roc_img, caption="Micro-average ROC curve comparison", use_container_width=True)
             else:
-                st.warning("ROC curves not available – test labels (y_test) were not found.")
+                # 2) Fallback: wie bisher berechnen/plotten (nur wenn Labels vorhanden)
+                if has_roc_data:
+                    try:
+                        classes = sorted(np.unique(y_test).tolist())
+                        y_true_bin = label_binarize(y_test, classes=classes)
+                        models_with_proba = [r for r in all_results if isinstance(r, dict) and 'y_pred_proba' in r]
+
+                        if models_with_proba:
+                            fig3 = plt.figure(figsize=(10, 8))
+                            drew_any = False
+                            for r in models_with_proba:
+                                proba = np.asarray(r['y_pred_proba'])
+                                if proba.ndim == 1:
+                                    continue
+                                n = min(len(y_test), proba.shape[0])
+                                if n == 0:
+                                    continue
+                                proba = proba[:n, :len(classes)]
+                                y_bin_n = y_true_bin[:n, :len(classes)]
+                                fpr, tpr, _ = roc_curve(y_bin_n.ravel(), proba.ravel())
+                                roc_auc = auc(fpr, tpr)
+                                plt.plot(fpr, tpr, label=f"{r.get('model_name','model')} (AUC = {roc_auc:.2f})")
+                                drew_any = True
+
+                            if drew_any:
+                                plt.plot([0, 1], [0, 1], 'k--')
+                                plt.xlim([0.0, 1.0]); plt.ylim([0.0, 1.05])
+                                plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+                                plt.title('Micro-average ROC Curve Comparison (DL)')
+                                plt.legend(loc="lower right"); plt.grid(True, alpha=0.3)
+                                st.pyplot(fig3); plt.close(fig3)
+                            else:
+                                st.info("No usable probability arrays found to draw ROC. "
+                                        "Add the PNG under api_models/charts/ to show it here.")
+                        else:
+                            st.info("No models with prediction probabilities; place the ROC PNG under /charts/ to display it.")
+                    except Exception as e:
+                        st.warning(f"Could not generate ROC curves (DL): {e}")
+                else:
+                    st.info("Test labels not found; place the ROC PNG under /charts/ to display it.")
         else:
             st.info("No DL pickle found (model_results.pkl). Skipping DL details.")
     except Exception as e:
