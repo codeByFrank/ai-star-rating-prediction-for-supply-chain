@@ -568,8 +568,7 @@ def combine_features(tfidf_vec, scaler, tfidf_texts, numeric_df: Optional[pd.Dat
 # ---------- PAGE: Load Data (leicht) ----------
 def show_load_page():
     section_header("Load Data", "📥")
-    st.write("Upload a **raw** CSV (mind. `ReviewText`, `ReviewRating`). "
-             f"Für die Vorschau wird – falls nötig – ein leichtes `processed_text` on-the-fly erzeugt.")
+    st.write("Upload a **raw** CSV file with at least the columns `ReviewText` and `ReviewRating`.")
 
     up = st.file_uploader("Upload raw CSV", type=["csv"])
     df = None
@@ -618,8 +617,31 @@ def show_load_page():
 
     # Wordclouds (leicht, aus processed_text)
     st.markdown("#### Wordclouds by sentiment group")
-    neg, neu, pos = build_neg_neu_pos_text(df)
-    plot_wordclouds(neg, neu, pos)
+
+    def _find_file(relpaths):
+        roots = []
+        if "ROOT_CANDIDATES" in globals():
+            roots += list(ROOT_CANDIDATES)
+        here = Path(__file__).resolve().parent
+        roots += [Path.cwd(), here, here.parent]
+        for root in roots:
+            for rel in relpaths:
+                p = (Path(root) / rel).resolve()
+                if p.exists():
+                    return p.as_posix()
+        return None
+
+    img_path = _find_file([
+        "charts/wordcloud.png",                 # dein genannter Pfad
+        "api_models/charts/wordcloud.png",      # falls dort liegt
+        "src/charts/wordcloud.png"              # fallback
+    ])
+
+    if img_path:
+        st.image(img_path, use_container_width=True,
+                 caption="Wordclouds by sentiment group (PNG)")
+    else:
+        st.info("Wordcloud PNG not found (expected at `charts/wordcloud.png`).")
 
     # In Session parken für die nächste Seite
     st.session_state["raw_df"] = df.copy()
