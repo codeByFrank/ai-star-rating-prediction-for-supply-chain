@@ -1,45 +1,34 @@
-Project Name
-==============================
+# AI Star Rating Prediction for Supply Chain
 
-This repo is a Starting Pack for DS projects. You can rearrange the structure to make it fits your project.
+Predict 1–5★ ratings from Trustpilot review text (Temu focus) using classic ML and Deep Learning.
+Includes a Streamlit app for live predictions, model comparison, and a 100-sample quick evaluation.
 
-Project Organization
-------------
+Live demo: https://supply-chain-ai-star-prediction.streamlit.app
 
-    ├── LICENSE
-    ├── README.md          <- The top-level README for developers using this project.
-    ├── data               <- Should be in your computer but not on Github (only in .gitignore)
-    │   ├── processed      <- The final, canonical data sets for modeling.
-    │   └── raw            <- The original, immutable data dump.
-    │
-    ├── models             <- Trained and serialized models, model predictions, or model summaries
-    │
-    ├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-    │                         the creator's name, and a short `-` delimited description, e.g.
-    │                         `1.0-alban-data-exploration`.
-    │
-    ├── references         <- Data dictionaries, manuals, links, and all other explanatory materials.
-    │
-    ├── reports            <- The reports that you'll make during this project as PDF
-    │   └── figures        <- Generated graphics and figures to be used in reporting
-    │
-    ├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-    │                         generated with `pip freeze > requirements.txt`
-    │
-    ├── src                <- Source code for use in this project.
-    │   ├── __init__.py    <- Makes src a Python module
-    │   │
-    │   ├── features       <- Scripts to turn raw data into features for modeling
-    │   │   └── build_features.py
-    │   │
-    │   ├── models         <- Scripts to train models and then use trained models to make
-    │   │   │                 predictions
-    │   │   ├── predict_model.py
-    │   │   └── train_model.py
-    │   │
-    │   ├── visualization  <- Scripts to create exploratory and results oriented visualizations
-    │   │   └── visualize.py
+# What this project does
 
---------
+* Uses Trustpilot reviews (English) and cleans/normalizes the text
+* Engineers features (TF-IDF + light numeric text signals + optional VADER)
+* Trains & compares multiple models (LogReg, LinearSVC, XGBoost, Voting/Stacking + DL variants)
+* Serves a Streamlit app for instant star-rating prediction and model inspection
+* More visuals & PDFs live in /documentation/.
+  
+## Quick preview
 
-<p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
+* Mashine learning
+<p align="center">
+  <img src="documentation/100_sample%20evaluation_%20color_coded_results.png" width="46%" />
+</p>
+<p align="center">
+  <img src="documentation/ml_live_prediction_sentiment_3_%20penalty.png" width="46%" />
+  <img src="documentation/ml_live_prediction_chart.png" width="46%" />
+</p>
+<p align="center">
+    <img src="documentation/ml_history.png" width="46%" />
+</p>
+
+* Deep learning
+<p align="center">
+  <img src="documentation/dl_live_prediction.png" width="46%" />
+  <img src="documentation/dl_live_prediction_chart.png" width="46%" />
+</p>
