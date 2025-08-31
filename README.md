@@ -15,20 +15,20 @@ Live demo: https://supply-chain-ai-star-prediction.streamlit.app
   
 ## Quick preview
 
-* Mashine learning
+# Mashine learning
 <p align="center">
-  <img src="documentation/100_sample%20evaluation_%20color_coded_results.png" width="46%" />
+  <img src="documentation/100_sample%20evaluation_%20color_coded_results.png" width="100%" />
 </p>
 <p align="center">
-  <img src="documentation/ml_live_prediction_sentiment_3_%20penalty.png" width="46%" />
-  <img src="documentation/ml_live_prediction_chart.png" width="46%" />
+  <img src="documentation/ml_live_prediction_sentiment_3_%20penalty.png" width="100%" />
+  <img src="documentation/ml_live_prediction_chart.png" width="100%" />
 </p>
 <p align="center">
-    <img src="documentation/ml_history.png" width="46%" />
+    <img src="documentation/ml_history.png" width="100%" />
 </p>
 
-* Deep learning
+# Deep learning
 <p align="center">
-  <img src="documentation/dl_live_prediction.png" width="46%" />
-  <img src="documentation/dl_live_prediction_chart.png" width="46%" />
+  <img src="documentation/dl_live_prediction.png" width="100%" />
+  <img src="documentation/dl_live_prediction_chart.png" width="100%" />
 </p>
