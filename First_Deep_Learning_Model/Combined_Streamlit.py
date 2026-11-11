@@ -2,6 +2,34 @@ import streamlit as st
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+
+
+def anonymise_reviewers(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace reviewer names and IDs with placeholders before anything is shown.
+
+    The datasets come from public Trustpilot reviews and contain real user names
+    and IDs. The models only use the review text, so the app replaces both with
+    stable placeholders ("Reviewer 00001" / "user_00001"): the same reviewer keeps
+    the same placeholder, counts and duplicate checks stay correct.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+    key = "UserId" if "UserId" in df.columns else ("UserName" if "UserName" in df.columns else None)
+    if key is None:
+        return df
+    codes, _ = pd.factorize(df[key])
+    numbers = pd.Series(codes, index=df.index) + 1
+    missing = numbers <= 0
+    if "UserId" in df.columns:
+        df["UserId"] = ("user_" + numbers.astype(str).str.zfill(5)).mask(missing)
+    if "UserName" in df.columns:
+        df["UserName"] = ("Reviewer " + numbers.astype(str).str.zfill(5)).mask(missing)
+    return df
+
+
+def read_reviews_csv(*args, **kwargs) -> pd.DataFrame:
+    """pd.read_csv plus anonymise_reviewers – used for every CSV the app loads."""
+    return anonymise_reviewers(pd.read_csv(*args, **kwargs))
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os, io, sys, pickle, json, time, random
@@ -576,7 +604,7 @@ def show_load_page():
     # 1) Upload bevorzugt
     if up is not None:
         try:
-            df = pd.read_csv(up)
+            df = read_reviews_csv(up)
             st.success(f"Loaded uploaded file with shape {df.shape}.")
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
@@ -587,7 +615,7 @@ def show_load_page():
                      "data/raw/temu_reviews.csv", "src/data/raw/temu_reviews.csv"]:
             if os.path.exists(cand):
                 try:
-                    df = pd.read_csv(cand)
+                    df = read_reviews_csv(cand)
                     st.info(f"Loaded fallback raw dataset: `{cand}` (shape {df.shape}).")
                     break
                 except Exception:
@@ -657,7 +685,7 @@ def show_preprocess_page():
         # Fallback: bereits vorhandene Preprocessed-Datei
         if os.path.exists(PATH_DATA_PROCESSED):
             st.info(f"No raw_df in session. Using `{PATH_DATA_PROCESSED}` as input.")
-            df_raw = pd.read_csv(PATH_DATA_PROCESSED)
+            df_raw = read_reviews_csv(PATH_DATA_PROCESSED)
         else:
             st.warning("No input data found. Please go to **Load Data** first.")
             st.stop()
@@ -811,7 +839,7 @@ def show_feature_engineering_page():
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
         try:
-            df_proc = pd.read_csv(PATH_DATA_PROCESSED)
+            df_proc = read_reviews_csv(PATH_DATA_PROCESSED)
         except Exception:
             df_proc = None
 
@@ -1300,7 +1328,7 @@ def show_100_sample_evaluation_page():
         if isinstance(obj, dict) and "df" in obj:
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
-        df_proc = pd.read_csv(PATH_DATA_PROCESSED)
+        df_proc = read_reviews_csv(PATH_DATA_PROCESSED)
 
     if df_proc is None:
         st.error("Need processed dataset and model artifacts. Please run earlier steps or copy files.")
@@ -1887,7 +1915,7 @@ def show_data_exploration_page():
     # ---------- Daten laden (Upload + Fallback + Cache) ----------
     @st.cache_data(show_spinner=False)
     def _load_csv(path: str):
-        return pd.read_csv(path)
+        return read_reviews_csv(path)
 
     def _first_existing(relpaths):
         roots = [Path.cwd(), Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent]
@@ -1900,7 +1928,7 @@ def show_data_exploration_page():
 
     up = st.file_uploader("Upload CSV (optional)", type=["csv"])
     if up:
-        df = pd.read_csv(up)
+        df = read_reviews_csv(up)
         source = "uploaded file"
     else:
         fallback = _first_existing([

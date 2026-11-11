@@ -16,6 +16,34 @@ from typing import Tuple, Dict, Optional
 
 import numpy as np
 import pandas as pd
+
+
+def anonymise_reviewers(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace reviewer names and IDs with placeholders before anything is shown.
+
+    The datasets come from public Trustpilot reviews and contain real user names
+    and IDs. The models only use the review text, so the app replaces both with
+    stable placeholders ("Reviewer 00001" / "user_00001"): the same reviewer keeps
+    the same placeholder, counts and duplicate checks stay correct.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+    key = "UserId" if "UserId" in df.columns else ("UserName" if "UserName" in df.columns else None)
+    if key is None:
+        return df
+    codes, _ = pd.factorize(df[key])
+    numbers = pd.Series(codes, index=df.index) + 1
+    missing = numbers <= 0
+    if "UserId" in df.columns:
+        df["UserId"] = ("user_" + numbers.astype(str).str.zfill(5)).mask(missing)
+    if "UserName" in df.columns:
+        df["UserName"] = ("Reviewer " + numbers.astype(str).str.zfill(5)).mask(missing)
+    return df
+
+
+def read_reviews_csv(*args, **kwargs) -> pd.DataFrame:
+    """pd.read_csv plus anonymise_reviewers – used for every CSV the app loads."""
+    return anonymise_reviewers(pd.read_csv(*args, **kwargs))
 import streamlit as st
 
 from sklearn.metrics import (
@@ -381,14 +409,14 @@ elif page.startswith("2)"):
 
     if up is not None:
         try:
-            df = pd.read_csv(up)
+            df = read_reviews_csv(up)
             st.success(f"Loaded uploaded file with shape {df.shape}.")
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
 
     if df is None and _exists(PATH_DATA_PROCESSED):
         try:
-            df = pd.read_csv(PATH_DATA_PROCESSED)
+            df = read_reviews_csv(PATH_DATA_PROCESSED)
             st.success(f"Loaded existing processed dataset: {PATH_DATA_PROCESSED} (shape {df.shape}).")
         except Exception as e:
             st.error(f"Could not load default processed CSV: {e}")
@@ -452,7 +480,7 @@ elif page.startswith("3)"):
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
         try:
-            df_proc = pd.read_csv(PATH_DATA_PROCESSED)
+            df_proc = read_reviews_csv(PATH_DATA_PROCESSED)
         except Exception:
             df_proc = None
 
@@ -922,7 +950,7 @@ elif page.startswith("5)"):
         if isinstance(obj, dict) and "df" in obj:
             df_proc = obj["df"]
     if df_proc is None and _exists(PATH_DATA_PROCESSED):
-        df_proc = pd.read_csv(PATH_DATA_PROCESSED)
+        df_proc = read_reviews_csv(PATH_DATA_PROCESSED)
 
     if df_proc is None:
         st.error("Need processed dataset and model artifacts. Please run earlier steps or copy files.")
