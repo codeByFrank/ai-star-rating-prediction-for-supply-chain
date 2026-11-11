@@ -19,12 +19,10 @@ import pandas as pd
 
 
 def anonymise_reviewers(df: pd.DataFrame) -> pd.DataFrame:
-    """Replace reviewer names and IDs with placeholders before anything is shown.
+    """Show reviewer names and IDs as placeholders ("Reviewer 00001" / "user_00001").
 
-    The datasets come from public Trustpilot reviews and contain real user names
-    and IDs. The models only use the review text, so the app replaces both with
-    stable placeholders ("Reviewer 00001" / "user_00001"): the same reviewer keeps
-    the same placeholder, counts and duplicate checks stay correct.
+    The models only use the review text. The same reviewer keeps the same
+    placeholder, so counts and duplicate checks stay correct.
     """
     if not isinstance(df, pd.DataFrame):
         return df
