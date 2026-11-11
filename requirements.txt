@@ -1,10 +1,12 @@
 dill>=0.3.8
 xgboost>=2.0.0
-scikit-learn>=1.3
+# Pinned: the saved models (src/models/*.pkl) were trained with scikit-learn 1.6.1.
+# From 1.8 on, the stacking model returns different probabilities for the same
+# input and the live prediction drifts to 3 stars. Retrain before raising this.
+scikit-learn==1.6.1
 streamlit
 pandas
 numpy
-scikit-learn
 scipy
 matplotlib
 seaborn
