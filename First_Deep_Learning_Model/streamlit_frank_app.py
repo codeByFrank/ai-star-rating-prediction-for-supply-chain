@@ -1279,6 +1279,9 @@ elif page.startswith("6)"):
                 proba /= proba.sum(axis=1, keepdims=True)
             proba_used = proba[0]
 
+        # "Initial Prediction" is the class with the highest probability in the chart
+        # below, i.e. after the optional 3★ penalty (same definition as on the
+        # 100-sample page). On an exact tie np.argmax picks the lower star.
         y_pred = y_init if proba_used is None else classes[int(np.argmax(proba_used))]
 
         # refined (group-aware) prediction
@@ -1306,7 +1309,7 @@ elif page.startswith("6)"):
                             color:white;border-radius:10px;padding:12px;">
                   <div style="font-weight:700;">Initial Prediction</div>
                   <div style="font-size:28px;margin:6px 0;">⭐</div>
-                  <div style="font-size:18px;font-weight:700;">{STAR[y_init]}</div>
+                  <div style="font-size:18px;font-weight:700;">{STAR[y_pred]}</div>
                 </div>
                 <div style="flex:1;min-width:180px;text-align:center;background:#27ae60;
                             color:white;border-radius:10px;padding:12px;">
@@ -1373,7 +1376,7 @@ elif page.startswith("6)"):
         st.session_state.live_history.append({
             "Time": datetime.now().strftime("%H:%M:%S"),
             "Text (preview)": (text[:120] + "…") if len(text) > 120 else text,
-            "Initial": y_init,
+            "Initial": y_pred,
             "Refined": y_refined,
             "Sentiment": group
         })
